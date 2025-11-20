@@ -4,6 +4,7 @@ AWS Health Check Script
 Checks the health of AWS resources for an OpenShift cluster
 """
 
+import argparse
 import json
 import sys
 import time
@@ -11,8 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# Global variable to accumulate markdown output
-markdown_output = []
+# Global variables
+markdown_output = []  # Accumulate markdown output
+source_directory = Path('.')  # Source directory for cluster data files
 
 def add_markdown(text: str):
     """Add text to markdown output"""
@@ -60,7 +62,8 @@ def print_status(status: str, message: str):
 
 def load_json_file(filename: str) -> Dict:
     """Load a JSON file and return its contents"""
-    filepath = Path(filename)
+    global source_directory
+    filepath = source_directory / filename
     if not filepath.exists():
         print_status("WARNING", f"File not found: {filename}")
         return {}
@@ -353,9 +356,9 @@ def get_cluster_resource_ids(cluster_id: str, infra_id: str) -> Dict:
             cluster_resources['nat_gateways'].update(nat_ids)
             cluster_resources['all_ids'].update(nat_ids)
 
-    # 5. Scan any .log files in current directory
-    import glob
-    for log_file in glob.glob("*.log"):
+    # 5. Scan any .log files in source directory
+    global source_directory
+    for log_file in source_directory.glob("*.log"):
         try:
             with open(log_file, 'r') as f:
                 log_content = f.read()
@@ -1770,8 +1773,8 @@ def check_vpc_dns_attributes(cluster_id: str, infra_id: str = None) -> Tuple[str
         infra_id = cluster_id.split('_')[0]
 
     # Find VPC files
-    import glob
-    vpc_files = glob.glob(f"{cluster_id}_vpc-*_VPC.json")
+    global source_directory
+    vpc_files = list(source_directory.glob(f"{cluster_id}_vpc-*_VPC.json"))
 
     if not vpc_files:
         print_status("WARNING", "No VPC files found")
@@ -1881,8 +1884,8 @@ def check_dhcp_options(cluster_id: str, infra_id: str = None) -> Tuple[str, List
         infra_id = cluster_id.split('_')[0]
 
     # Find VPC files to get DHCP Options Set IDs
-    import glob
-    vpc_files = glob.glob(f"{cluster_id}_vpc-*_VPC.json")
+    global source_directory
+    vpc_files = list(source_directory.glob(f"{cluster_id}_vpc-*_VPC.json"))
 
     if not vpc_files:
         print_status("WARNING", "No VPC files found")
@@ -2274,6 +2277,228 @@ def check_installation_status(cluster_id: str, infra_id: str = None) -> Tuple[st
     else:
         return ("OK", [])
 
+def check_cluster_context(cluster_id: str, infra_id: str = None) -> Tuple[str, List[str]]:
+    """
+    Check cluster context data from osdctl cluster context output
+    Args:
+        cluster_id: The cluster ID used for file naming
+        infra_id: The infrastructure ID (if None, will derive from cluster_id)
+    Returns: (status, list of issues)
+    """
+    print_header("Cluster Context Check")
+
+    issues = []
+
+    # Load cluster_context.json
+    context_file = f"{cluster_id}_cluster_context.json"
+    context_data = load_json_file(context_file)
+
+    if not context_data:
+        print_status("WARNING", f"Cluster context file not found: {context_file}")
+        add_markdown(f"⚠️ **Cluster context file not found**: `{context_file}`\n\n")
+        add_markdown("To generate this file, run:\n```bash\n")
+        add_markdown(f"osdctl cluster context -C {cluster_id} -o json > {context_file}\n```\n\n")
+        return ("WARNING", ["Cluster context file not found"])
+
+    # Extract and display key information
+    cluster_name = context_data.get('ClusterName', 'unknown')
+    cluster_version = context_data.get('ClusterVersion', 'unknown')
+    ocm_env = context_data.get('OCMEnv', 'unknown')
+    region_id = context_data.get('RegionID', 'unknown')
+
+    print(f"Cluster Name: {cluster_name}")
+    print(f"Cluster Version: {cluster_version}")
+    print(f"OCM Environment: {ocm_env}")
+    print(f"Region ID: {region_id or 'Not specified'}")
+
+    add_markdown(f"**Cluster Name**: {cluster_name}\n\n")
+    add_markdown(f"**Cluster Version**: {cluster_version}\n\n")
+    add_markdown(f"**OCM Environment**: {ocm_env}\n\n")
+    add_markdown(f"**Region ID**: {region_id or 'Not specified'}\n\n")
+
+    # Network Configuration
+    network_type = context_data.get('NetworkType', 'unknown')
+    network_machine_cidr = context_data.get('NetworkMachineCIDR', 'unknown')
+    network_service_cidr = context_data.get('NetworkServiceCIDR', 'unknown')
+    network_pod_cidr = context_data.get('NetworkPodCIDR', 'unknown')
+    network_host_prefix = context_data.get('NetworkHostPrefix', 0)
+    max_nodes = context_data.get('NetworkMaxNodesFromPodCIDR', 0)
+    max_pods_per_node = context_data.get('NetworkMaxPodsPerNode', 0)
+    max_services = context_data.get('NetworkMaxServices', 0)
+
+    print(f"\n{Colors.BOLD}Network Configuration:{Colors.END}")
+    print(f"  Network Type: {network_type}")
+    print(f"  Machine CIDR: {network_machine_cidr}")
+    print(f"  Service CIDR: {network_service_cidr}")
+    print(f"  Pod CIDR: {network_pod_cidr}")
+    print(f"  Host Prefix: {network_host_prefix}")
+    print(f"  Max Nodes (from Pod CIDR): {max_nodes}")
+    print(f"  Max Pods per Node: {max_pods_per_node}")
+    print(f"  Max Services: {max_services}")
+
+    add_markdown(f"\n### Network Configuration\n\n")
+    add_markdown(f"| Parameter | Value |\n")
+    add_markdown(f"|-----------|-------|\n")
+    add_markdown(f"| Network Type | `{network_type}` |\n")
+    add_markdown(f"| Machine CIDR | `{network_machine_cidr}` |\n")
+    add_markdown(f"| Service CIDR | `{network_service_cidr}` |\n")
+    add_markdown(f"| Pod CIDR | `{network_pod_cidr}` |\n")
+    add_markdown(f"| Host Prefix | `{network_host_prefix}` |\n")
+    add_markdown(f"| Max Nodes (from Pod CIDR) | `{max_nodes}` |\n")
+    add_markdown(f"| Max Pods per Node | `{max_pods_per_node}` |\n")
+    add_markdown(f"| Max Services | `{max_services}` |\n\n")
+
+    # Validate network configuration
+    if network_type == 'unknown':
+        issues.append("Network type is unknown")
+        print_status("WARNING", "Network type is unknown")
+    else:
+        print_status("OK", f"Network type is {network_type}")
+
+    # Jira Issues
+    jira_issues = context_data.get('JiraIssues', [])
+    print(f"\n{Colors.BOLD}Jira Issues:{Colors.END}")
+    print(f"  Total Issues: {len(jira_issues)}")
+
+    add_markdown(f"\n### Jira Issues\n\n")
+    add_markdown(f"**Total Issues**: {len(jira_issues)}\n\n")
+
+    if jira_issues:
+        for issue in jira_issues:
+            issue_key = issue.get('key', 'unknown')
+            issue_fields = issue.get('fields', {})
+            summary = issue_fields.get('summary', 'No summary')
+            status_obj = issue_fields.get('status', {})
+            status = status_obj.get('name', 'unknown')
+            priority_obj = issue_fields.get('priority', {})
+            priority = priority_obj.get('name', 'unknown')
+            created = issue_fields.get('created', 'unknown')
+
+            print(f"\n  Issue: {issue_key}")
+            print(f"    Summary: {summary}")
+            print(f"    Status: {status}")
+            print(f"    Priority: {priority}")
+            print(f"    Created: {created}")
+
+            # Add to markdown with collapsible details
+            add_markdown(f"\n<details>\n")
+            add_markdown(f"<summary><strong>📋 {issue_key}</strong> - {summary[:80]}{'...' if len(summary) > 80 else ''}</summary>\n\n")
+            add_markdown(f"- **Summary**: {summary}\n")
+            add_markdown(f"- **Status**: {status}\n")
+            add_markdown(f"- **Priority**: {priority}\n")
+            add_markdown(f"- **Created**: {created}\n")
+            add_markdown(f"- **Link**: [View in Jira](https://issues.redhat.com/browse/{issue_key})\n\n")
+
+            # Include description if available
+            description = issue_fields.get('description', '')
+            if description:
+                # Truncate long descriptions
+                desc_preview = description[:500] + ('...' if len(description) > 500 else '')
+                add_markdown(f"**Description**:\n```\n{desc_preview}\n```\n\n")
+
+            add_markdown(f"</details>\n\n")
+
+            # Check if issue indicates cluster problems
+            if status.lower() not in ['resolved', 'closed', 'done']:
+                issues.append(f"Open Jira issue: {issue_key} - {summary}")
+                print_status("WARNING", f"Open issue: {issue_key}")
+    else:
+        print_status("OK", "No Jira issues found")
+        add_markdown("✅ No Jira issues found for this cluster.\n\n")
+
+    # Handover Announcements
+    handover_announcements = context_data.get('HandoverAnnouncements', [])
+    print(f"\n{Colors.BOLD}Handover Announcements:{Colors.END}")
+    print(f"  Total Announcements: {len(handover_announcements)}")
+
+    add_markdown(f"\n### Handover Announcements\n\n")
+    add_markdown(f"**Total Announcements**: {len(handover_announcements)}\n\n")
+
+    if handover_announcements:
+        for i, announcement in enumerate(handover_announcements[:10], 1):  # Show first 10
+            ann_key = announcement.get('key', 'unknown')
+            ann_fields = announcement.get('fields', {})
+            summary = ann_fields.get('summary', 'No summary')
+            print(f"  {i}. {ann_key}: {summary}")
+            add_markdown(f"{i}. [{ann_key}](https://issues.redhat.com/browse/{ann_key}): {summary}\n")
+
+        if len(handover_announcements) > 10:
+            remaining = len(handover_announcements) - 10
+            print(f"  ... and {remaining} more")
+            add_markdown(f"\n_... and {remaining} more announcements_\n")
+        add_markdown("\n")
+    else:
+        add_markdown("No handover announcements.\n\n")
+
+    # Support Exceptions
+    support_exceptions = context_data.get('SupportExceptions', [])
+    print(f"\n{Colors.BOLD}Support Exceptions:{Colors.END}")
+    if support_exceptions:
+        print(f"  Total Exceptions: {len(support_exceptions)}")
+        issues.append(f"Cluster has {len(support_exceptions)} support exceptions")
+        print_status("WARNING", f"Found {len(support_exceptions)} support exceptions")
+        add_markdown(f"\n### ⚠️ Support Exceptions\n\n")
+        add_markdown(f"**Total Exceptions**: {len(support_exceptions)}\n\n")
+    else:
+        print(f"  None")
+        print_status("OK", "No support exceptions")
+        add_markdown(f"\n### ✅ Support Exceptions\n\n")
+        add_markdown(f"No support exceptions found.\n\n")
+
+    # PD Alerts
+    pd_alerts = context_data.get('PdAlerts', {})
+    print(f"\n{Colors.BOLD}PagerDuty Alerts:{Colors.END}")
+    if pd_alerts and isinstance(pd_alerts, dict) and pd_alerts:
+        alert_count = len(pd_alerts)
+        print(f"  Active Alerts: {alert_count}")
+        issues.append(f"Cluster has {alert_count} active PagerDuty alerts")
+        print_status("WARNING", f"Found {alert_count} active PD alerts")
+        add_markdown(f"\n### ⚠️ PagerDuty Alerts\n\n")
+        add_markdown(f"**Active Alerts**: {alert_count}\n\n")
+    else:
+        print(f"  None")
+        print_status("OK", "No active PagerDuty alerts")
+        add_markdown(f"\n### ✅ PagerDuty Alerts\n\n")
+        add_markdown(f"No active PagerDuty alerts.\n\n")
+
+    # Limited Support Reasons
+    limited_support = context_data.get('LimitedSupportReasons', None)
+    if limited_support:
+        print(f"\n{Colors.BOLD}Limited Support:{Colors.END}")
+        print(f"  Reasons: {limited_support}")
+        issues.append(f"Cluster has limited support: {limited_support}")
+        print_status("WARNING", "Cluster has limited support")
+        add_markdown(f"\n### ⚠️ Limited Support\n\n")
+        add_markdown(f"**Reasons**: {limited_support}\n\n")
+
+    # SDN to OVN Migration
+    migration_state = context_data.get('MigrationStateValue', '')
+    sdn_to_ovn_migration = context_data.get('SdnToOvnMigration', None)
+    if migration_state or sdn_to_ovn_migration:
+        print(f"\n{Colors.BOLD}Network Migration:{Colors.END}")
+        if migration_state:
+            print(f"  Migration State: {migration_state}")
+            print_status("WARNING", f"Network migration in progress: {migration_state}")
+            issues.append(f"Network migration state: {migration_state}")
+            add_markdown(f"\n### ⚠️ Network Migration\n\n")
+            add_markdown(f"**Migration State**: `{migration_state}`\n\n")
+        if sdn_to_ovn_migration:
+            print(f"  SDN to OVN Migration: {sdn_to_ovn_migration}")
+            add_markdown(f"**SDN to OVN Migration**: {sdn_to_ovn_migration}\n\n")
+
+    # Summary
+    print(f"\n{Colors.BOLD}Cluster Context Summary:{Colors.END}")
+    print(f"  Jira Issues: {len(jira_issues)}")
+    print(f"  Handover Announcements: {len(handover_announcements)}")
+    print(f"  Support Exceptions: {len(support_exceptions)}")
+    print(f"  Issues Found: {len(issues)}")
+
+    if not issues:
+        print_status("OK", "All cluster context checks passed")
+        return ("OK", [])
+    else:
+        return ("WARNING", issues)
+
 def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
                           region: str, openshift_version: str, cluster_state: str,
                           results: Dict) -> str:
@@ -2307,15 +2532,16 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     full_markdown.append("1. [Cluster Information](#cluster-information)\n")
     full_markdown.append("2. [Health Check Summary](#health-check-summary)\n")
     full_markdown.append("3. [Installation Status Check](#installation-status-check)\n")
-    full_markdown.append("4. [VPC DNS Attributes Health Check](#vpc-dns-attributes-health-check)\n")
-    full_markdown.append("5. [DHCP Options Health Check](#dhcp-options-health-check)\n")
-    full_markdown.append("6. [VPC Endpoint Service Health Check (PrivateLink)](#vpc-endpoint-service-health-check-privatelink)\n")
-    full_markdown.append("7. [Security Groups Health Check](#security-groups-health-check)\n")
-    full_markdown.append("8. [EC2 Instances Health Check](#ec2-instances-health-check)\n")
-    full_markdown.append("9. [Load Balancers Health Check](#load-balancers-health-check)\n")
-    full_markdown.append("10. [Route53 Health Check](#route53-health-check)\n")
-    full_markdown.append("11. [CloudTrail Logs Health Check](#cloudtrail-logs-health-check)\n")
-    full_markdown.append("12. [Detailed Analysis](#detailed-analysis)\n\n")
+    full_markdown.append("4. [Cluster Context Check](#cluster-context-check)\n")
+    full_markdown.append("5. [VPC DNS Attributes Health Check](#vpc-dns-attributes-health-check)\n")
+    full_markdown.append("6. [DHCP Options Health Check](#dhcp-options-health-check)\n")
+    full_markdown.append("7. [VPC Endpoint Service Health Check (PrivateLink)](#vpc-endpoint-service-health-check-privatelink)\n")
+    full_markdown.append("8. [Security Groups Health Check](#security-groups-health-check)\n")
+    full_markdown.append("9. [EC2 Instances Health Check](#ec2-instances-health-check)\n")
+    full_markdown.append("10. [Load Balancers Health Check](#load-balancers-health-check)\n")
+    full_markdown.append("11. [Route53 Health Check](#route53-health-check)\n")
+    full_markdown.append("12. [CloudTrail Logs Health Check](#cloudtrail-logs-health-check)\n")
+    full_markdown.append("13. [Detailed Analysis](#detailed-analysis)\n\n")
 
     full_markdown.append("---\n\n")
 
@@ -2342,13 +2568,62 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
 
 def main():
     """Main health check function"""
-    global markdown_output
+    global markdown_output, source_directory
     markdown_output = []  # Reset markdown output
 
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='AWS Health Check for OpenShift/ROSA clusters',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run health check in current directory
+  python3 check_aws_health.py
+
+  # Run health check on data in a specific directory
+  python3 check_aws_health.py -d /path/to/cluster/data
+  python3 check_aws_health.py --directory ~/clusters/my-cluster
+
+Notes:
+  The script expects cluster data files in the following format:
+    {cluster_id}_cluster.json
+    {cluster_id}_resources.json
+    {cluster_id}_ec2_instances.json
+    {cluster_id}_security_groups.json
+    ... and other cluster data files
+
+  Use get_install_artifacts.sh to collect all required data files.
+"""
+    )
+    parser.add_argument(
+        '-d', '--directory',
+        type=str,
+        default='.',
+        help='Source directory containing cluster JSON and log files (default: current directory)'
+    )
+
+    args = parser.parse_args()
+
+    # Set source directory
+    source_directory = Path(args.directory).resolve()
+    if not source_directory.exists():
+        print_status("ERROR", f"Source directory does not exist: {source_directory}")
+        sys.exit(1)
+    if not source_directory.is_dir():
+        print_status("ERROR", f"Source path is not a directory: {source_directory}")
+        sys.exit(1)
+
+    print(f"{Colors.BOLD}Source directory: {source_directory}{Colors.END}")
+
     # Get cluster ID from first file in directory
-    cluster_files = list(Path('.').glob('*_cluster.json'))
+    cluster_files = list(source_directory.glob('*_cluster.json'))
     if not cluster_files:
-        print_status("ERROR", "No cluster files found. Run this script in the cluster directory.")
+        print_status("ERROR", f"No cluster files found in: {source_directory}")
+        print(f"\nMake sure the directory contains cluster data files in the format:")
+        print(f"  {{cluster_id}}_cluster.json")
+        print(f"  {{cluster_id}}_resources.json")
+        print(f"  ... etc.\n")
+        print(f"Use get_install_artifacts.sh to collect cluster data.")
         sys.exit(1)
 
     cluster_id = cluster_files[0].stem.replace('_cluster', '')
@@ -2366,6 +2641,19 @@ def main():
     openshift_version = cluster_data.get('openshift_version', 'unknown')
     cluster_state = cluster_data.get('state', 'unknown')
 
+    # Load cluster context data if available
+    context_file = f"{cluster_id}_cluster_context.json"
+    context_data = load_json_file(context_file)
+
+    network_type = 'unknown'
+    jira_issues_count = 0
+    handover_count = 0
+
+    if context_data:
+        network_type = context_data.get('NetworkType', 'unknown')
+        jira_issues_count = len(context_data.get('JiraIssues', []))
+        handover_count = len(context_data.get('HandoverAnnouncements', []))
+
     print(f"\n{Colors.BOLD}AWS Health Check for OpenShift Cluster{Colors.END}")
     print(f"{Colors.BOLD}Cluster Name: {cluster_name}{Colors.END}")
     print(f"{Colors.BOLD}Cluster ID: {cluster_uuid}{Colors.END}")
@@ -2373,6 +2661,11 @@ def main():
     print(f"{Colors.BOLD}Region: {region}{Colors.END}")
     print(f"{Colors.BOLD}OpenShift Version: {openshift_version}{Colors.END}")
     print(f"{Colors.BOLD}State: {cluster_state}{Colors.END}")
+    print(f"{Colors.BOLD}Network Type: {network_type}{Colors.END}")
+    if jira_issues_count > 0:
+        print(f"{Colors.BOLD}{Colors.YELLOW}Jira Issues: {jira_issues_count}{Colors.END}")
+    if handover_count > 0:
+        print(f"{Colors.BOLD}Handover Announcements: {handover_count}{Colors.END}")
     print(f"{Colors.BOLD}Timestamp: {datetime.now(timezone.utc).isoformat()}{Colors.END}")
 
     # Run all health checks
@@ -2380,6 +2673,9 @@ def main():
 
     # Check installation status first (most important)
     results['installation_status'] = check_installation_status(cluster_id, infra_id)
+
+    # Check cluster context (network config, Jira issues, handover announcements)
+    results['cluster_context'] = check_cluster_context(cluster_id, infra_id)
 
     # Check VPC DNS attributes (required for Route53 private zones)
     results['vpc_dns_attributes'] = check_vpc_dns_attributes(cluster_id, infra_id)

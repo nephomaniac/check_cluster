@@ -126,6 +126,7 @@ echo "This may require refreshing local AWS creds, example..."
 echo "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
 echo ""
 CLUSTER_JSON="${clusterid}_cluster.json"
+CLUSTER_CTX_FILE="${clusterid}_cluster_context.json"
 CLUSTER_RESOURCES="${clusterid}_resources.json"
 CLUSTER_EC2_INSTANCES="${clusterid}_ec2_instances.json"
 
@@ -145,6 +146,19 @@ else
     echo "Failed to get cluster from ocm? "
     echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid} > ${CLUSTER_JSON}"
     exit 1
+  fi
+fi
+
+if [ -f ${CLUSTER_CTX_FILE} ]; then 
+  echo "Using existing cluster context file: ${CLUSTER_CTX_FILE}"
+else
+  echo "Fetching cluster context..."
+  echo "osdctl cluster context  -C ${clusterid} -o json"
+  CLUSTER_CTX=$(osdctl cluster context  -C ${clusterid} -o json)
+  if [ $? -ne 0 ]; then
+    echo "WARNING - failed to fetch cluster context for cluster:'${clusterid}'"
+  else 
+    echo ${CLUSTER_CTX} > ${CLUSTER_CTX_FILE}
   fi
 fi
 

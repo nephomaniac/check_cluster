@@ -24,6 +24,9 @@ eval $(ocm backplane cloud credentials <cluster-id> -o env)
 
 # 3. Run health check analysis
 python3 check_aws_health.py
+
+# OR: Run health check from anywhere with explicit directory
+python3 check_aws_health.py -d /path/to/cluster/data
 ```
 
 ---
@@ -146,15 +149,26 @@ Automated health validation script that analyzes collected AWS data and identifi
 ### Usage
 
 ```bash
-# Must be run in directory with collected data files
+# Run in current directory (default)
 python3 check_aws_health.py
+
+# Run on cluster data in a specific directory
+python3 check_aws_health.py -d /path/to/cluster/data
+python3 check_aws_health.py --directory ~/clusters/my-cluster
+
+# Display help
+python3 check_aws_health.py --help
 ```
 
 The script automatically:
-1. Detects cluster ID from local files
+1. Detects cluster ID from local files (or specified directory)
 2. Loads cluster metadata
 3. Runs all health checks
 4. Generates markdown report
+
+**Options**:
+- `-d, --directory` - Source directory containing cluster JSON and log files (default: current directory)
+- `-h, --help` - Display help message with examples
 
 ### Output
 
@@ -232,11 +246,17 @@ ocm list clusters | grep <cluster-name>
 eval $(ocm backplane cloud credentials <cluster-id> -o env)
 
 # Step 4: Collect cluster data
+mkdir -p ~/troubleshooting/<cluster-name>
 cd ~/troubleshooting/<cluster-name>
 /path/to/get_install_artifacts.sh -c <cluster-id>
 
-# Step 5: Run health check
+# Step 5: Run health check (two options)
+
+# Option A: Run from cluster data directory
 python3 /path/to/check_aws_health.py
+
+# Option B: Run from anywhere with directory argument
+python3 /path/to/check_aws_health.py -d ~/troubleshooting/<cluster-name>
 
 # Step 6: Review results
 cat results_*.md
@@ -448,7 +468,16 @@ For issues, questions, or contributions:
 
 ## Version History
 
-### Current Version
+### Current Version (2025-11-20)
+- **NEW**: Added directory argument (`-d/--directory`) to check_aws_health.py
+  - Run health checks from any directory
+  - Specify source directory for cluster data files
+  - Maintains backward compatibility (default: current directory)
+- Added cluster_context.json integration
+  - Network configuration validation
+  - Jira issues tracking
+  - Handover announcements display
+  - Support exceptions and PD alerts monitoring
 - Added VPC DNS attributes validation
 - Added DHCP Options validation
 - Added VPC Endpoint Service validation (PrivateLink)
