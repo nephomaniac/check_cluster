@@ -1795,7 +1795,7 @@ def check_vpc_dns_attributes(cluster_id: str, infra_id: str = None) -> Tuple[str
     for vpc_file in vpc_files:
         # Extract VPC ID from filename
         import re
-        vpc_match = re.search(r'(vpc-[a-f0-9]{17})', vpc_file)
+        vpc_match = re.search(r'(vpc-[a-f0-9]{17})', str(vpc_file.name))
         if not vpc_match:
             continue
 
@@ -1804,8 +1804,8 @@ def check_vpc_dns_attributes(cluster_id: str, infra_id: str = None) -> Tuple[str
 
         print(f"\n{Colors.BOLD}Checking VPC: {vpc_id}{Colors.END}")
 
-        # Load VPC data
-        vpc_data = load_json_file(vpc_file)
+        # Load VPC data (pass just filename, load_json_file adds source_directory)
+        vpc_data = load_json_file(vpc_file.name)
         if not vpc_data or 'Vpcs' not in vpc_data or len(vpc_data['Vpcs']) == 0:
             issues.append(f"VPC {vpc_id}: Failed to load VPC data")
             continue
@@ -1900,7 +1900,8 @@ def check_dhcp_options(cluster_id: str, infra_id: str = None) -> Tuple[str, List
 
     dhcp_checked = 0
     for vpc_file in vpc_files:
-        vpc_data = load_json_file(vpc_file)
+        # Pass just filename, load_json_file adds source_directory
+        vpc_data = load_json_file(vpc_file.name)
         if not vpc_data or 'Vpcs' not in vpc_data or len(vpc_data['Vpcs']) == 0:
             continue
 
