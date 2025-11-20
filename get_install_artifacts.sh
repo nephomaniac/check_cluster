@@ -1,12 +1,130 @@
 #!/bin/bash
 
-clusterid=$1
+#
+# get_install_artifacts.sh - ROSA Cluster Data Collection Tool
+#
+# SUMMARY:
+#   Automated data collection script for Red Hat OpenShift Service on AWS (ROSA)
+#   cluster troubleshooting and post-mortem analysis. Gathers comprehensive AWS
+#   infrastructure and OpenShift cluster installation artifacts by:
+#
+#   1. Fetching cluster metadata from OpenShift Cluster Manager (OCM)
+#   2. Extracting resource IDs from installation logs
+#   3. Collecting detailed AWS resource information (VPC, EC2, Load Balancers, etc.)
+#   4. Gathering CloudTrail audit logs for the cluster creation window
+#   5. Retrieving EC2 instance console logs
+#
+#   All data is saved to local JSON files for offline analysis by tools like
+#   check_aws_health.py. The script is idempotent and safe to run multiple times.
+#
+# USAGE:
+#   ./get_install_artifacts.sh -c <cluster-id>
+#   ./get_install_artifacts.sh --cluster <cluster-id>
+#
+# PREREQUISITES:
+#   - ocm CLI (logged in)
+#   - aws CLI (v2)
+#   - Valid AWS credentials (eval $(ocm backplane cloud credentials <cluster-id> -o env))
+#   - jq, python3, gdate (brew install coreutils on macOS)
+#
+
+# Show usage information
+show_help() {
+  cat << EOF
+ROSA Cluster Data Collection Tool
+
+SYNOPSIS:
+  $(basename "$0") -c|--cluster <cluster-id>
+  $(basename "$0") -h|--help
+
+DESCRIPTION:
+  Automated data collection script for ROSA cluster troubleshooting and analysis.
+  Gathers comprehensive AWS infrastructure and OpenShift cluster installation
+  artifacts from OCM and AWS APIs.
+
+  Collected data includes:
+    • OCM cluster metadata and installation logs
+    • VPC details and DNS attributes
+    • DHCP Options Sets
+    • VPC Endpoint Services (PrivateLink clusters)
+    • EC2 instances and console logs
+    • Load Balancers and Target Groups
+    • Route53 DNS records
+    • Security Groups
+    • CloudTrail audit logs (2-hour window from cluster creation)
+
+OPTIONS:
+  -c, --cluster <cluster-id>    ROSA cluster ID to collect data for
+  -h, --help                    Display this help message and exit
+
+PREREQUISITES:
+  • ocm CLI (authenticated)
+  • aws CLI v2
+  • Valid AWS credentials:
+      eval \$(ocm backplane cloud credentials <cluster-id> -o env)
+  • Required tools: jq, python3, gdate (macOS: brew install coreutils)
+
+EXAMPLES:
+  # Refresh AWS credentials and collect data
+  eval \$(ocm backplane cloud credentials 2ml4ao38fdomfv0iqrsca3abmttnlclm -o env)
+  $(basename "$0") -c 2ml4ao38fdomfv0iqrsca3abmttnlclm
+
+  # Show this help message
+  $(basename "$0") --help
+
+OUTPUT FILES:
+  All files are created in the current directory with naming pattern:
+    {cluster_id}_{resource_type}.json
+    {cluster_id}_{resource_id}_{resource_type}.json
+
+  Examples:
+    2ml4ao38fdomfv0iqrsca3abmttnlclm_cluster.json
+    2ml4ao38fdomfv0iqrsca3abmttnlclm_vpc-xxx_VPC.json
+    2ml4ao38fdomfv0iqrsca3abmttnlclm_ec2_instances.json
+    2ml4ao38fdomfv0iqrsca3abmttnlclm_cloudtrail.json
+
+NOTES:
+  • Script is idempotent - safe to run multiple times
+  • Existing files are reused (not re-fetched)
+  • Use with check_aws_health.py for automated health validation
+
+EOF
+}
+
+# Parse command-line arguments
+clusterid=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -c|--cluster)
+      clusterid="$2"
+      shift 2
+      ;;
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Error: Unknown option: $1" >&2
+      echo ""
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+# Validate cluster ID was provided
 if [ -z "${clusterid}" ]; then
-  echo "missing cluster id?"
+  echo "Error: Cluster ID is required" >&2
+  echo ""
+  show_help
   exit 1
 fi
+
+echo "Starting data collection for cluster: ${clusterid}"
 echo "This may require refreshing local AWS creds, example..."
-echo "eval \$(ocm backplane cloud credentials ${clusterid} -o env)\n\n"
+echo "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
+echo ""
 CLUSTER_JSON="${clusterid}_cluster.json"
 CLUSTER_RESOURCES="${clusterid}_resources.json"
 CLUSTER_EC2_INSTANCES="${clusterid}_ec2_instances.json"
