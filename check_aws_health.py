@@ -387,32 +387,36 @@ def get_resource_info_from_local_files(cluster_id: str, resource_id: str, resour
         cluster_id: The cluster ID
         resource_id: The AWS resource ID (sg-xxx, i-xxx, etc.)
         resource_type: Type of resource (sg, instance, lb, etc.)
-    Returns: Dictionary with resource info including tags and usage
+    Returns: Dictionary with resource info including tags, usage, and source filename
     """
     resource_info = {
         'tags': {},
         'name': 'unknown',
         'role': 'unknown',
         'found': False,
-        'details': {}
+        'details': {},
+        'source_file': None
     }
 
     # Search in appropriate file based on resource type
     if resource_type in ['sg', 'security-group']:
-        data = load_json_file(f"{cluster_id}_security_groups.json")
+        filename = f"{cluster_id}_security_groups.json"
+        data = load_json_file(filename)
         if data:
             for sg in data.get('SecurityGroups', []):
                 if sg.get('GroupId') == resource_id:
                     resource_info['found'] = True
                     resource_info['name'] = sg.get('GroupName', 'unknown')
                     resource_info['details'] = sg
+                    resource_info['source_file'] = filename
                     # Extract tags
                     for tag in sg.get('Tags', []):
                         resource_info['tags'][tag.get('Key')] = tag.get('Value')
                     break
 
     elif resource_type in ['instance', 'i']:
-        data = load_json_file(f"{cluster_id}_ec2_instances.json")
+        filename = f"{cluster_id}_ec2_instances.json"
+        data = load_json_file(filename)
         if data:
             instances = []
             if isinstance(data, list):
@@ -426,6 +430,7 @@ def get_resource_info_from_local_files(cluster_id: str, resource_id: str, resour
                 if instance.get('InstanceId') == resource_id:
                     resource_info['found'] = True
                     resource_info['details'] = instance
+                    resource_info['source_file'] = filename
                     # Extract tags and determine role
                     for tag in instance.get('Tags', []):
                         key = tag.get('Key')
@@ -448,13 +453,15 @@ def get_resource_info_from_local_files(cluster_id: str, resource_id: str, resour
                     break
 
     elif resource_type in ['lb', 'loadbalancer']:
-        data = load_json_file(f"{cluster_id}_LB_ALL.json")
+        filename = f"{cluster_id}_LB_ALL.json"
+        data = load_json_file(filename)
         if data:
             for lb in data.get('LoadBalancers', []):
                 if lb.get('LoadBalancerArn') == resource_id or lb.get('LoadBalancerName') == resource_id:
                     resource_info['found'] = True
                     resource_info['name'] = lb.get('LoadBalancerName', 'unknown')
                     resource_info['details'] = lb
+                    resource_info['source_file'] = filename
                     break
 
     return resource_info
@@ -506,11 +513,14 @@ def analyze_event_impact_with_context(cluster_id: str, event_name: str, request_
                 if resource_info['found']:
                     sg_name = resource_info['name']
                     tags = resource_info['tags']
+                    source_file = resource_info.get('source_file', 'unknown')
 
                     # This is a verified cluster security group
                     if True:  # Already verified above
                         is_cluster_impacting = True
                         impact_analysis.append(f"CLUSTER SECURITY GROUP MODIFIED: {sg_name}")
+                        if source_file:
+                            impact_analysis.append(f"▸ Resource Details File: {source_file}")
 
                         # Determine specific role
                         if f"{infra_id}-controlplane" in sg_name or f"{infra_id}-master" in sg_name:
@@ -544,12 +554,8 @@ def analyze_event_impact_with_context(cluster_id: str, event_name: str, request_
                                     to_port = perm.get('toPort', 'any')
                                     protocol = perm.get('ipProtocol', 'any')
                                     impact_analysis.append(f"  - Port {from_port}-{to_port} ({protocol})")
-                else:
-                    is_cluster_impacting = True  # Assume cluster impact if we can't verify
-                    impact_analysis.append(f"Security group {affected_resource_id} modified")
-                    impact_analysis.append("▸ Impact: May block cluster network communication")
-                    missing_data_commands.append(f"# Get security group details:")
-                    missing_data_commands.append(f"aws ec2 describe-security-groups --group-ids {affected_resource_id} > {cluster_id}_sg_{affected_resource_id}.json")
+                # If resource not found in local files, skip this event (no source_file mapping)
+                # User will not see events without local resource data
 
     # Instance events
     elif 'instance' in event_lower and ('stop' in event_lower or 'terminate' in event_lower or 'reboot' in event_lower):
@@ -576,10 +582,13 @@ def analyze_event_impact_with_context(cluster_id: str, event_name: str, request_
                 instance_name = resource_info['name']
                 role = resource_info['role']
                 tags = resource_info['tags']
+                source_file = resource_info.get('source_file', 'unknown')
 
                 # Already verified as cluster instance above
                 is_cluster_impacting = True
                 impact_analysis.append(f"CLUSTER INSTANCE AFFECTED: {instance_name} ({instance_id})")
+                if source_file:
+                    impact_analysis.append(f"▸ Resource Details File: {source_file}")
                 impact_analysis.append(f"▸ Instance Role: {role.upper()}")
 
                 if role == 'bootstrap':
@@ -614,13 +623,8 @@ def analyze_event_impact_with_context(cluster_id: str, event_name: str, request_
                     impact_analysis.append(f"▸ Instance Type: {instance_details['InstanceType']}")
                 if 'State' in instance_details:
                     impact_analysis.append(f"▸ Current State: {instance_details['State']}")
-            else:
-                # Instance not found in local data
-                is_cluster_impacting = True  # Assume impact
-                impact_analysis.append(f"Instance {instance_id} affected by {event_name}")
-                impact_analysis.append("▸ Impact: Cannot determine instance role without local data")
-                missing_data_commands.append(f"# Get instance details:")
-                missing_data_commands.append(f"aws ec2 describe-instances --instance-ids {instance_id} > {cluster_id}_instance_{instance_id}.json")
+            # If instance not found in local files, skip this event (no source_file mapping)
+            # User will not see events without local resource data
 
     # Load Balancer events
     elif 'loadbalancer' in event_lower or 'targetgroup' in event_lower:
@@ -639,9 +643,12 @@ def analyze_event_impact_with_context(cluster_id: str, event_name: str, request_
             if lb_name or lb_arn:
                 resource_info = get_resource_info_from_local_files(cluster_id, lb_name or lb_arn, 'lb')
 
-                if resource_info['found'] or verified_cluster_resource:
+                if resource_info['found']:
+                    source_file = resource_info.get('source_file', 'unknown')
                     is_cluster_impacting = True
                     impact_analysis.append(f"CLUSTER LOAD BALANCER MODIFIED: {lb_name or lb_arn}")
+                    if source_file:
+                        impact_analysis.append(f"▸ Resource Details File: {source_file}")
                     impact_analysis.append("▸ Cluster Usage: Load balancer provides cluster API endpoint")
                     impact_analysis.append("▸ Routes traffic to: Master nodes on port 6443 (API) and 22623 (MCS)")
 
@@ -651,18 +658,35 @@ def analyze_event_impact_with_context(cluster_id: str, event_name: str, request_
                     elif 'deregister' in event_lower:
                         impact_analysis.append("▸ Impact: Master nodes removed from load balancer")
                         impact_analysis.append("▸ Consequences: API requests fail, cluster unreachable")
-                else:
-                    missing_data_commands.append(f"# Get load balancer details:")
-                    missing_data_commands.append(f"aws elbv2 describe-load-balancers --names {lb_name} > {cluster_id}_lb_{lb_name}.json")
+                # If load balancer not found in local files, skip this event (no source_file mapping)
+                # User will not see events without local resource data
 
     # Network/VPC events
     elif any(x in event_lower for x in ['vpc', 'subnet', 'routetable', 'internetgateway', 'natgateway']):
         if 'delete' in event_lower or 'detach' in event_lower or 'disassociate' in event_lower:
-            is_cluster_impacting = True
-            impact_analysis.append("CLUSTER NETWORK INFRASTRUCTURE MODIFIED")
-            impact_analysis.append("▸ Cluster Usage: VPC provides network isolation for cluster")
-            impact_analysis.append("▸ Impact: Network connectivity disrupted")
-            impact_analysis.append("▸ Consequences: Nodes cannot communicate, pods cannot network")
+            # Extract resource ID from request parameters
+            network_resource_id = None
+            if request_params and isinstance(request_params, dict):
+                if 'vpcId' in request_params:
+                    network_resource_id = request_params.get('vpcId')
+                elif 'subnetId' in request_params:
+                    network_resource_id = request_params.get('subnetId')
+                elif 'routeTableId' in request_params:
+                    network_resource_id = request_params.get('routeTableId')
+                elif 'internetGatewayId' in request_params:
+                    network_resource_id = request_params.get('internetGatewayId')
+                elif 'DeleteNatGatewayRequest' in request_params:
+                    nat_req = request_params.get('DeleteNatGatewayRequest', {})
+                    network_resource_id = nat_req.get('NatGatewayId')
+
+            # Only mark as cluster-impacting if resource ID is in cluster_resources
+            if network_resource_id and cluster_resources and network_resource_id in cluster_resources['all_ids']:
+                is_cluster_impacting = True
+                impact_analysis.append("CLUSTER NETWORK INFRASTRUCTURE MODIFIED")
+                impact_analysis.append("▸ Cluster Usage: VPC provides network isolation for cluster")
+                impact_analysis.append("▸ Impact: Network connectivity disrupted")
+                impact_analysis.append("▸ Consequences: Nodes cannot communicate, pods cannot network")
+            # If resource not found in cluster_resources, skip this event
 
     # Only return impact if this event actually affects the cluster
     if is_cluster_impacting:
