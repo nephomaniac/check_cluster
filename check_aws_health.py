@@ -930,6 +930,8 @@ def check_security_groups(cluster_id: str, infra_id: str = None) -> Tuple[str, L
                             issue_msg = f"{required_sg_name} ({sg_id}): Public cluster but {rule_description} only allows VPC traffic ({source_str}), should allow 0.0.0.0/0 or specific installer IP"
                             issues.append(issue_msg)
                             print_status("WARNING", f"Public cluster but rule only allows VPC traffic - may cause installation failures")
+                            print(f"    Expected rule: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)")
+                            add_markdown(f"- **Expected rule**: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)\n\n")
 
                         elif is_private_cluster and has_public_access:
                             # Private cluster should not have public access on API/MCS ports
@@ -2431,29 +2433,29 @@ def check_cluster_context(cluster_id: str, infra_id: str = None) -> Tuple[str, L
         print_status("OK", "No Jira issues found")
         add_markdown("✅ No Jira issues found for this cluster.\n\n")
 
-    # Handover Announcements
+    # Handover Announcements - REMOVED FROM OUTPUT (still loaded for summary count)
     handover_announcements = context_data.get('HandoverAnnouncements', [])
-    print(f"\n{Colors.BOLD}Handover Announcements:{Colors.END}")
-    print(f"  Total Announcements: {len(handover_announcements)}")
-
-    add_markdown(f"\n### Handover Announcements\n\n")
-    add_markdown(f"**Total Announcements**: {len(handover_announcements)}\n\n")
-
-    if handover_announcements:
-        for i, announcement in enumerate(handover_announcements[:10], 1):  # Show first 10
-            ann_key = announcement.get('key', 'unknown')
-            ann_fields = announcement.get('fields', {})
-            summary = ann_fields.get('summary', 'No summary')
-            print(f"  {i}. {ann_key}: {summary}")
-            add_markdown(f"{i}. [{ann_key}](https://issues.redhat.com/browse/{ann_key}): {summary}\n")
-
-        if len(handover_announcements) > 10:
-            remaining = len(handover_announcements) - 10
-            print(f"  ... and {remaining} more")
-            add_markdown(f"\n_... and {remaining} more announcements_\n")
-        add_markdown("\n")
-    else:
-        add_markdown("No handover announcements.\n\n")
+    # print(f"\n{Colors.BOLD}Handover Announcements:{Colors.END}")
+    # print(f"  Total Announcements: {len(handover_announcements)}")
+    #
+    # add_markdown(f"\n### Handover Announcements\n\n")
+    # add_markdown(f"**Total Announcements**: {len(handover_announcements)}\n\n")
+    #
+    # if handover_announcements:
+    #     for i, announcement in enumerate(handover_announcements[:10], 1):  # Show first 10
+    #         ann_key = announcement.get('key', 'unknown')
+    #         ann_fields = announcement.get('fields', {})
+    #         summary = ann_fields.get('summary', 'No summary')
+    #         print(f"  {i}. {ann_key}: {summary}")
+    #         add_markdown(f"{i}. [{ann_key}](https://issues.redhat.com/browse/{ann_key}): {summary}\n")
+    #
+    #     if len(handover_announcements) > 10:
+    #         remaining = len(handover_announcements) - 10
+    #         print(f"  ... and {remaining} more")
+    #         add_markdown(f"\n_... and {remaining} more announcements_\n")
+    #     add_markdown("\n")
+    # else:
+    #     add_markdown("No handover announcements.\n\n")
 
     # Support Exceptions
     support_exceptions = context_data.get('SupportExceptions', [])
@@ -2514,7 +2516,7 @@ def check_cluster_context(cluster_id: str, infra_id: str = None) -> Tuple[str, L
     # Summary
     print(f"\n{Colors.BOLD}Cluster Context Summary:{Colors.END}")
     print(f"  Jira Issues: {len(jira_issues)}")
-    print(f"  Handover Announcements: {len(handover_announcements)}")
+    # print(f"  Handover Announcements: {len(handover_announcements)}")  # REMOVED FROM OUTPUT
     print(f"  Support Exceptions: {len(support_exceptions)}")
     print(f"  Issues Found: {len(issues)}")
 
@@ -2560,7 +2562,7 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     full_markdown.append("4. [Cluster Context Check](#cluster-context-check)\n")
     full_markdown.append("5. [VPC DNS Attributes Health Check](#vpc-dns-attributes-health-check)\n")
     full_markdown.append("6. [DHCP Options Health Check](#dhcp-options-health-check)\n")
-    full_markdown.append("7. [VPC Endpoint Service Health Check (PrivateLink)](#vpc-endpoint-service-health-check-privatelink)\n")
+    full_markdown.append("7. [VPC Endpoint Service Health Check (PrivateLink)](#vpc-endpoint-service-health-check-(privatelink))\n")
     full_markdown.append("8. [Security Groups Health Check](#security-groups-health-check)\n")
     full_markdown.append("9. [EC2 Instances Health Check](#ec2-instances-health-check)\n")
     full_markdown.append("10. [Load Balancers Health Check](#load-balancers-health-check)\n")
@@ -2570,20 +2572,41 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
 
     full_markdown.append("---\n\n")
 
-    # Add all accumulated markdown content
-    full_markdown.extend(markdown_output)
-
-    # Summary section
-    full_markdown.append('\n<a name="health-check-summary"></a>\n')
+    # Health Check Summary section (moved to top, after TOC)
+    full_markdown.append('<a name="health-check-summary"></a>\n')
     full_markdown.append("## Health Check Summary\n\n")
     full_markdown.append("| Component | Status | Issues |\n")
     full_markdown.append("|-----------|--------|--------|\n")
+
+    # Mapping from result keys to section anchors
+    section_anchors = {
+        'installation_status': 'installation-status-check',
+        'cluster_context': 'cluster-context-check',
+        'vpc_dns_attributes': 'vpc-dns-attributes-health-check',
+        'dhcp_options': 'dhcp-options-health-check',
+        'vpc_endpoint_service': 'vpc-endpoint-service-health-check-(privatelink)',
+        'security_groups': 'security-groups-health-check',
+        'instances': 'ec2-instances-health-check',
+        'load_balancers': 'load-balancers-health-check',
+        'route53': 'route53-health-check',
+        'cloudtrail': 'cloudtrail-logs-health-check'
+    }
 
     for category, (status, issues) in results.items():
         category_name = category.replace('_', ' ').title()
         status_badge = "🟢" if status == "OK" else ("🟡" if status == "WARNING" else "🔴")
         issue_count = len(issues)
-        full_markdown.append(f"| {category_name} | {status_badge} {status} | {issue_count} |\n")
+
+        # Make component name a clickable link to its section
+        anchor = section_anchors.get(category, category.replace('_', '-'))
+        linked_name = f"[{category_name}](#{anchor})"
+
+        full_markdown.append(f"| {linked_name} | {status_badge} {status} | {issue_count} |\n")
+
+    full_markdown.append("\n---\n\n")
+
+    # Add all accumulated markdown content (detailed sections)
+    full_markdown.extend(markdown_output)
 
     # Write to file
     with open(filename, 'w') as f:
@@ -2672,12 +2695,12 @@ Notes:
 
     network_type = 'unknown'
     jira_issues_count = 0
-    handover_count = 0
+    # handover_count = 0  # REMOVED FROM OUTPUT
 
     if context_data:
         network_type = context_data.get('NetworkType', 'unknown')
         jira_issues_count = len(context_data.get('JiraIssues', []))
-        handover_count = len(context_data.get('HandoverAnnouncements', []))
+        # handover_count = len(context_data.get('HandoverAnnouncements', []))  # REMOVED FROM OUTPUT
 
     print(f"\n{Colors.BOLD}AWS Health Check for OpenShift Cluster{Colors.END}")
     print(f"{Colors.BOLD}Cluster Name: {cluster_name}{Colors.END}")
@@ -2689,8 +2712,8 @@ Notes:
     print(f"{Colors.BOLD}Network Type: {network_type}{Colors.END}")
     if jira_issues_count > 0:
         print(f"{Colors.BOLD}{Colors.YELLOW}Jira Issues: {jira_issues_count}{Colors.END}")
-    if handover_count > 0:
-        print(f"{Colors.BOLD}Handover Announcements: {handover_count}{Colors.END}")
+    # if handover_count > 0:  # REMOVED FROM OUTPUT
+    #     print(f"{Colors.BOLD}Handover Announcements: {handover_count}{Colors.END}")
     print(f"{Colors.BOLD}Timestamp: {datetime.now(timezone.utc).isoformat()}{Colors.END}")
 
     # Run all health checks
@@ -2699,7 +2722,7 @@ Notes:
     # Check installation status first (most important)
     results['installation_status'] = check_installation_status(cluster_id, infra_id)
 
-    # Check cluster context (network config, Jira issues, handover announcements)
+    # Check cluster context (network config, Jira issues)
     results['cluster_context'] = check_cluster_context(cluster_id, infra_id)
 
     # Check VPC DNS attributes (required for Route53 private zones)
@@ -2718,8 +2741,10 @@ Notes:
     results['route53'] = check_route53(cluster_id)
     results['cloudtrail'] = check_cloudtrail_logs(cluster_id, infra_id)
 
-    # Summary
-    print_header("Health Check Summary")
+    # Summary (terminal output only - markdown summary is generated in write_markdown_report)
+    print(f"\n{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.BLUE}{'Health Check Summary'.center(80)}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}\n")
 
     all_ok = True
     for category, (status, issues) in results.items():
