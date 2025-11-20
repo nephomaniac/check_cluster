@@ -2526,6 +2526,62 @@ def check_cluster_context(cluster_id: str, infra_id: str = None) -> Tuple[str, L
     else:
         return ("WARNING", issues)
 
+def wrap_sections_in_details(markdown_lines: List[str], default_open: bool = False) -> List[str]:
+    """
+    Wrap markdown sections (starting with ##) in HTML details/summary tags
+    Args:
+        markdown_lines: List of markdown strings (may contain multiple lines each)
+        default_open: If True, sections are open by default
+    Returns: List with sections wrapped in details tags
+    """
+    # Join all lines into one string, then split into individual lines
+    full_text = ''.join(markdown_lines)
+    lines = full_text.split('\n')
+
+    result = []
+    in_section = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Check if this is an anchor followed by a header on the next line
+        if line.startswith('<a name=') and i + 1 < len(lines):
+            next_line = lines[i + 1]
+            if next_line.startswith('## '):
+                # Close previous section if any
+                if in_section:
+                    result.append('</details>')
+                    result.append('')
+
+                # Add anchor
+                result.append(line)
+
+                # Extract header text
+                header_text = next_line.replace('## ', '', 1).strip()
+
+                # Start new section
+                open_attr = ' open' if default_open else ''
+                result.append(f'<details{open_attr}>')
+                result.append(f'<summary><h2>{header_text}</h2></summary>')
+                result.append('')
+
+                in_section = True
+                i += 2  # Skip both anchor and header lines
+                continue
+
+        result.append(line)
+        i += 1
+
+    # Close final section
+    if in_section:
+        result.append('')
+        result.append('</details>')
+        result.append('')
+
+    # Return as a single string
+    return ['\n'.join(result)]
+
 def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
                           region: str, openshift_version: str, cluster_state: str,
                           results: Dict) -> str:
@@ -2543,19 +2599,22 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     full_markdown.append(f"# AWS Health Check Report - {cluster_name}\n")
     full_markdown.append(f"**Generated**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
 
-    # Cluster Information
+    # Cluster Information (collapsible, open by default)
     full_markdown.append('<a name="cluster-information"></a>\n')
-    full_markdown.append("## Cluster Information\n\n")
+    full_markdown.append('<details open>\n')
+    full_markdown.append('<summary><h2>Cluster Information</h2></summary>\n\n')
     full_markdown.append(f"- **Cluster Name**: {cluster_name}\n")
     full_markdown.append(f"- **Cluster ID**: `{cluster_uuid}`\n")
     full_markdown.append(f"- **Infrastructure ID**: `{infra_id}`\n")
     full_markdown.append(f"- **Region**: {region}\n")
     full_markdown.append(f"- **OpenShift Version**: {openshift_version}\n")
     full_markdown.append(f"- **State**: {cluster_state}\n\n")
+    full_markdown.append('</details>\n\n')
 
-    # Table of Contents
+    # Table of Contents (collapsible, open by default)
     full_markdown.append('<a name="table-of-contents"></a>\n')
-    full_markdown.append("## Table of Contents\n\n")
+    full_markdown.append('<details open>\n')
+    full_markdown.append('<summary><h2>Table of Contents</h2></summary>\n\n')
     full_markdown.append("1. [Cluster Information](#cluster-information)\n")
     full_markdown.append("2. [Health Check Summary](#health-check-summary)\n")
     full_markdown.append("3. [Installation Status Check](#installation-status-check)\n")
@@ -2569,12 +2628,14 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     full_markdown.append("11. [Route53 Health Check](#route53-health-check)\n")
     full_markdown.append("12. [CloudTrail Logs Health Check](#cloudtrail-logs-health-check)\n")
     full_markdown.append("13. [Detailed Analysis](#detailed-analysis)\n\n")
+    full_markdown.append('</details>\n\n')
 
     full_markdown.append("---\n\n")
 
-    # Health Check Summary section (moved to top, after TOC)
+    # Health Check Summary section (collapsible, open by default)
     full_markdown.append('<a name="health-check-summary"></a>\n')
-    full_markdown.append("## Health Check Summary\n\n")
+    full_markdown.append('<details open>\n')
+    full_markdown.append('<summary><h2>Health Check Summary</h2></summary>\n\n')
     full_markdown.append("| Component | Status | Issues |\n")
     full_markdown.append("|-----------|--------|--------|\n")
 
@@ -2603,10 +2664,22 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
 
         full_markdown.append(f"| {linked_name} | {status_badge} {status} | {issue_count} |\n")
 
-    full_markdown.append("\n---\n\n")
+    full_markdown.append("\n")
+    full_markdown.append('</details>\n\n')
+
+    full_markdown.append("---\n\n")
+
+    # Detailed Analysis section header
+    full_markdown.append('<a name="detailed-analysis"></a>\n')
+    full_markdown.append("## Detailed Analysis\n\n")
+    full_markdown.append("The following sections provide detailed health check results for each component.\n\n")
+    full_markdown.append("---\n\n")
+
+    # Wrap detailed sections in collapsible details tags (collapsed by default)
+    wrapped_sections = wrap_sections_in_details(markdown_output, default_open=False)
 
     # Add all accumulated markdown content (detailed sections)
-    full_markdown.extend(markdown_output)
+    full_markdown.extend(wrapped_sections)
 
     # Write to file
     with open(filename, 'w') as f:
@@ -2749,17 +2822,16 @@ Notes:
     all_ok = True
     for category, (status, issues) in results.items():
         category_name = category.replace('_', ' ').title()
-        print(f"\n{Colors.BOLD}{category_name}:{Colors.END}")
-        print_status(status, f"{len(issues)} issue(s) found" if issues else "All checks passed")
-
+    #    print(f"\n{Colors.BOLD}{category_name}:{Colors.END}")
+    #    print_status(status, f"{len(issues)} issue(s) found" if issues else "All checks passed")
         if status != "OK":
             all_ok = False
 
     print("\n" + "=" * 80)
     if all_ok:
-        print_status("OK", "Overall cluster health: HEALTHY")
+        print_status("OK", "Summary: NO ISSUES DETECTED IN THIS CHECK")
     else:
-        print_status("WARNING", "Overall cluster health: ISSUES DETECTED")
+        print_status("WARNING", "Summary: ISSUES DETECTED")
 
     # Write markdown report
     print(f"\n{Colors.BOLD}{Colors.BLUE}Generating markdown report...{Colors.END}")
