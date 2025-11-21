@@ -56,6 +56,11 @@ DESCRIPTION:
 OPTIONS:
   -c, --cluster <cluster-id>    ROSA cluster ID to collect data for
   -d, --dir <directory>         Directory for reading/writing files (default: current directory)
+  -s, --start <date>            CloudTrail start date in format: YYYY-MM-DDTHH:MM:SSZ
+                                (default: cluster creation time)
+  -e, --elapsed <time>          CloudTrail capture window (e.g., "3h", "2d", "4days", "3minutes")
+                                (default: 2 hours)
+  -p, --period <seconds>        CloudWatch metrics period in seconds (default: 300)
   -h, --help                    Display this help message and exit
 
 PREREQUISITES:
@@ -73,6 +78,14 @@ EXAMPLES:
   # Collect data in a specific directory
   eval \$(ocm backplane cloud credentials <clusterid> -o env)
   $(basename "$0") -c <clusterid> -d /path/to/cluster/data
+
+  # Use custom CloudTrail time window
+  eval \$(ocm backplane cloud credentials <clusterid> -o env)
+  $(basename "$0") -c <clusterid> -s 2025-01-15T10:30:00Z -e 3h
+
+  # Collect CloudTrail logs for a 2-day window
+  eval \$(ocm backplane cloud credentials <clusterid> -o env)
+  $(basename "$0") -c <clusterid> -s 2025-01-15T00:00:00Z -e 2days
 
 OUTPUT FILES:
   All files are created in the specified directory (or current directory if -d
@@ -119,12 +132,517 @@ HDR() {
   echo ""
   printline
   BLUE "$@"
-  printline 
+  printline
+}
+
+# Parse elapsed time format (e.g., "3h", "2d", "4days", "3minutes")
+# and convert to gdate-compatible format
+parse_elapsed_time() {
+  local input="$1"
+
+  # Extract number and unit
+  if [[ "$input" =~ ^([0-9]+)([a-zA-Z]+)$ ]]; then
+    local num="${BASH_REMATCH[1]}"
+    local unit="${BASH_REMATCH[2]}"
+
+    # Normalize unit to full word format for gdate
+    case "${unit,,}" in
+      h|hour|hours)
+        echo "${num} hours"
+        ;;
+      m|minute|minutes)
+        echo "${num} minutes"
+        ;;
+      d|day|days)
+        echo "${num} days"
+        ;;
+      *)
+        PERR "Error: Invalid time unit '${unit}'. Use h/hours, m/minutes, or d/days"
+        return 1
+        ;;
+    esac
+  else
+    PERR "Error: Invalid elapsed time format '${input}'. Expected format: <number><unit> (e.g., '3h', '2days')"
+    return 1
+  fi
+}
+
+
+
+# Fetch CloudWatch CPU percent metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Returns CPU utilization as a percentage (0-100)
+fetch_instance_cpu_percent_metrics() {
+  local instance_id="$1"
+  local metric_period="${PERIOD:-300}"
+  local output_file="${WRKDIR}${clusterid}_${instance_id}_cpu_percent_${CAPTURE_START}_${CAPTURE_END}.json"
+
+  if [ -f "${output_file}" ]; then
+    echo "Using existing CPU percent metrics file: ${output_file}"
+    return 0
+  fi
+
+  echo "aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
+
+  local metrics_output
+  metrics_output=$(aws cloudwatch get-metric-statistics \
+    --namespace AWS/EC2 \
+    --metric-name CPUUtilization \
+    --dimensions Name=InstanceId,Value=${instance_id} \
+    --start-time ${CAPTURE_START} \
+    --end-time ${CAPTURE_END} \
+    --period ${metric_period} \
+    --statistics Average \
+    --output json)
+
+  if [ $? -eq 0 ]; then
+    echo "${metrics_output}" > "${output_file}"
+  else
+    PERR "Failed to fetch CPU percent info for ${instance_id}"
+    return 1
+  fi
+}
+
+# Fetch CloudWatch memory percent metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Note: Requires CloudWatch agent to be installed on the instance
+fetch_instance_mem_percent_metrics() {
+  local instance_id="$1"
+  local metric_period="${PERIOD:-300}"
+  local output_file="${WRKDIR}${clusterid}_${instance_id}_mem_${CAPTURE_START}_${CAPTURE_END}.json"
+
+  if [ -f "${output_file}" ]; then
+    echo "Using existing memory metrics file: ${output_file}"
+    return 0
+  fi
+
+  echo "aws cloudwatch get-metric-statistics --namespace CWAgent --metric-name mem_used_percent --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
+
+  local metrics_output
+  metrics_output=$(aws cloudwatch get-metric-statistics \
+    --namespace CWAgent \
+    --metric-name mem_used_percent \
+    --dimensions Name=InstanceId,Value=${instance_id} \
+    --start-time ${CAPTURE_START} \
+    --end-time ${CAPTURE_END} \
+    --period ${metric_period} \
+    --statistics Average \
+    --output json)
+
+  if [ $? -eq 0 ]; then
+    echo "${metrics_output}" > "${output_file}"
+  else
+    PERR "Failed to fetch memory info for ${instance_id}"
+    return 1
+  fi
+}
+
+# Fetch CloudWatch EBS IOPS exceeded check metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Returns 1 if instance has exceeded EBS IOPS limit, 0 otherwise
+fetch_instance_ebs_iops_exceeded() {
+  local instance_id="$1"
+  local metric_period="${PERIOD:-300}"
+  local output_file="${WRKDIR}${clusterid}_${instance_id}_ebs_iops_exceeded_${CAPTURE_START}_${CAPTURE_END}.json"
+
+  if [ -f "${output_file}" ]; then
+    echo "Using existing EBS IOPS exceeded metrics file: ${output_file}"
+    return 0
+  fi
+
+  echo "aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name InstanceEBSIOPSExceededCheck --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
+
+  local metrics_output
+  metrics_output=$(aws cloudwatch get-metric-statistics \
+    --namespace AWS/EC2 \
+    --metric-name InstanceEBSIOPSExceededCheck \
+    --dimensions Name=InstanceId,Value=${instance_id} \
+    --start-time ${CAPTURE_START} \
+    --end-time ${CAPTURE_END} \
+    --period ${metric_period} \
+    --statistics Average \
+    --output json)
+
+  if [ $? -eq 0 ]; then
+    echo "${metrics_output}" > "${output_file}"
+  else
+    PERR "Failed to fetch EBS IOPS exceeded info for ${instance_id}"
+    return 1
+  fi
+}
+
+# Fetch CloudWatch EBS throughput exceeded check metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Returns 1 if instance has exceeded EBS throughput limit, 0 otherwise
+fetch_instance_ebs_througput_exceeded() {
+  local instance_id="$1"
+  local metric_period="${PERIOD:-300}"
+  local output_file="${WRKDIR}${clusterid}_${instance_id}_ebs_throughput_exceeded_${CAPTURE_START}_${CAPTURE_END}.json"
+
+  if [ -f "${output_file}" ]; then
+    echo "Using existing EBS throughput exceeded metrics file: ${output_file}"
+    return 0
+  fi
+
+  echo "aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name InstanceEBSThroughputExceededCheck --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
+
+  local metrics_output
+  metrics_output=$(aws cloudwatch get-metric-statistics \
+    --namespace AWS/EC2 \
+    --metric-name InstanceEBSThroughputExceededCheck \
+    --dimensions Name=InstanceId,Value=${instance_id} \
+    --start-time ${CAPTURE_START} \
+    --end-time ${CAPTURE_END} \
+    --period ${metric_period} \
+    --statistics Average \
+    --output json)
+
+  if [ $? -eq 0 ]; then
+    echo "${metrics_output}" > "${output_file}"
+  else
+    PERR "Failed to fetch EBS throughput exceeded info for ${instance_id}"
+    return 1
+  fi
+}
+
+# Fetch EC2 instance console logs
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: clusterid, WRKDIR
+fetch_instance_console_logs() {
+  local instance_id="$1"
+  local console_file="${WRKDIR}${clusterid}_${instance_id}_console.log"
+
+  echo "VM: ${instance_id}"
+  if [ -f "${console_file}" ]; then
+    GREEN "Using existing vm ${instance_id} console file: ${console_file}"
+    return 0
+  fi
+
+  BLUE "Getting console output for instance ${instance_id}"
+  echo "aws ec2 get-console-output --instance-id ${instance_id} --output text --query 'Output' > ${console_file}"
+
+  local console_output
+  console_output=$(aws ec2 get-console-output --instance-id ${instance_id} --output text --query 'Output')
+
+  if [[ $? -eq 0 && -n "${console_output}" ]]; then
+    echo "${console_output}" > "${console_file}"
+  else
+    PERR "Failed to fetch ec2 console output for instance: ${instance_id}"
+    return 1
+  fi
+}
+
+# Fetch CloudTrail logs for the cluster
+# Uses global variables: ELAPSED_TIME, START_DATE, WRKDIR, clusterid, CLUSTER_JSON
+# Sets global variables: CAPTURE_START, CAPTURE_END, CAPTURE_WINDOW, CLUSTER_CT_LOGS
+get_cloud_trail_logs() {
+  CLUSTER_CT_LOGS="${WRKDIR}${clusterid}_${CAPTURE_START}.${CAPTURE_END}.cloudtrail.json"
+
+  if [ -f ${CLUSTER_CT_LOGS} ]; then
+    GREEN "using existing cloudtrail logs: ${CLUSTER_CT_LOGS} "
+  else
+    # This is currently using the cluster creation time as the start for the window and 2 hours for the size of the window.
+    # For PD alerts or issues not involving cluster installs, this should be adjusted using the timestamp of the alert
+    BLUE "Gathering cloudtrail logs for '${CAPTURE_WINDOW}' from '${CAPTURE_START}' to '${CAPTURE_END}' ..."
+    echo "aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END}  --output json | jq -c '.[]' > ${CLUSTER_CT_LOGS}"
+
+    CTOUT=$(aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --output json | jq -c '.[]')
+    if [[ $? -eq 0 && -n "$CTOUT" ]]; then
+      echo ${CTOUT} > ${CLUSTER_CT_LOGS}
+    else
+      PERR "Failed fetch cloudtrail info from AWS"
+    fi
+  fi
+  printline
+}
+
+# Fetch Route53 hosted zone and DNS record information
+# Uses global variables: CLUSTER_JSON, DOMAIN_PREFIX, WRKDIR, clusterid
+get_route53_info() {
+  local base_domain=$(jq -r '.dns.base_domain' ${CLUSTER_JSON})
+  base_domain="${DOMAIN_PREFIX}.${base_domain}"
+  local hosted_zones="${WRKDIR}${clusterid}_hosted_zones.json"
+
+  echo "BASE_DOMAIN=\"${DOMAIN_PREFIX}.${base_domain}\""
+
+  if [ -f ${hosted_zones} ]; then
+    GREEN "using existing file: ${hosted_zones}"
+  else
+    BLUE "fetching hosted zone for cluster domain ${base_domain}..."
+    echo "aws route53 list-hosted-zones --query \"HostedZones[?contains(Name, '${base_domain}')]\" --output json"
+    local zone_output
+    zone_output=$(aws route53 list-hosted-zones --query "HostedZones[?contains(Name, '${base_domain}')]" --output json)
+    if [[ $? -eq 0 && -n "${zone_output}" ]]; then
+      echo ${zone_output} > ${hosted_zones}
+    else
+      PERR "Failed to fetch hosted zones for domain ${base_domain}"
+    fi
+  fi
+
+  local zone_id=""
+  if [ -f ${hosted_zones} ]; then
+    echo "\nGetting hosted ZONE_ID from ${hosted_zones}..."
+    for zone_id in $(jq -r '.[].Id | split("/")[2]' ${hosted_zones}); do
+      if [ -n "$zone_id" ]; then
+        local record_sets="${WRKDIR}${clusterid}_route53_${zone_id}.records.json"
+        if [ -f ${record_sets} ]; then
+          GREEN "using existing file ${record_sets}"
+        else
+          BLUE "Fetching API records sets for hosted zone ${zone_id} ..."
+          echo "aws route53 list-resource-record-sets --hosted-zone-id \"$zone_id\" --output json"
+          local records_output
+          records_output=$(aws route53 list-resource-record-sets --hosted-zone-id "$zone_id" --output json)
+          if [[ $? -eq 0 && -n "$records_output" ]]; then
+            echo ${records_output} > ${record_sets}
+          else
+            PERR "Failed to get API record sets"
+          fi
+        fi
+      fi
+    done
+  else
+    PERR "No zone found for cluster domain:'${base_domain}' ?"
+  fi
+}
+
+# Fetch AWS load balancer information and tag associations
+# Uses global variables: WRKDIR, clusterid, INFRA_ID
+get_load_balancers_info() {
+  local lb_all_file="${WRKDIR}${clusterid}_LB_ALL.json"
+
+  if [ -f ${lb_all_file} ]; then
+    GREEN "Using existing all load balancers json file ${lb_all_file} ..."
+  else
+    BLUE "Fetching all load balancers from AWS..."
+    echo "aws elbv2 describe-load-balancers --output json"
+    local lb_output
+    lb_output=$(aws elbv2 describe-load-balancers --output json)
+    if [[ $? -eq 0 && -n "$lb_output" ]]; then
+      echo ${lb_output} > ${lb_all_file}
+    else
+      PERR "Failed to fetch load balancers from AWS"
+    fi
+  fi
+
+  echo """
+AWS LBs dont provide tags in the describe LB response, so
+a separate API call 'describe-tags' is need to create a tag <-> resource association.
+Iterating over LBs found in ${lb_all_file} to get tag associations...
+jq -r '.LoadBalancers[].LoadBalancerArn' ${lb_all_file}
+"""
+
+  jq -r '.LoadBalancers[].LoadBalancerArn' ${lb_all_file} | while read -r arn; do
+    local lb="${arn##*/}"
+    local lb_file="${WRKDIR}${clusterid}_LB_${lb}.json"
+
+    if [ -f ${lb_file} ]; then
+      GREEN "using existing load balancer file: ${lb_file}"
+    else
+      BLUE "Get AWS load balancer info for: $arn"
+      local tags_output
+      tags_output=$(aws elbv2 describe-tags --resource-arns "$arn" --output json)
+      if [[ $? -ne 0 || -z "$tags_output" ]]; then
+        PERR "Failed to describe-tags for elb ${arn}"
+      else
+        echo ${tags_output} > ${lb_file}
+      fi
+    fi
+
+    if [ -f ${lb_file} ]; then
+      # Check if any tag contains the infra ID
+      echo "Looking for LB tags containing infra: '${INFRA_ID}'..."
+      echo "jq -r --arg infra \"${INFRA_ID}\" '.TagDescriptions[].Tags[] | select((.Value | contains(\$infra)) or (.Key | contains(\$infra))) | .Key + \"=\" + .Value' ${lb_file}"
+      local match
+      match=$(jq -r --arg infra "${INFRA_ID}" '.TagDescriptions[].Tags[] | select((.Value | contains($infra)) or (.Key | contains($infra))) | .Key + "=" + .Value' ${lb_file})
+      if [ -n "$match" ]; then
+        local lb_svc
+        local lb_role
+        lb_svc=$(jq -r '.TagDescriptions[].Tags[] | select(.Key == "kubernetes.io/service-name") | "Kub service-name: " + .Value' ${lb_file})
+        lb_role=$(jq -r '.TagDescriptions[].Tags[] | select(.Key | contains("role")) | "Kub role: " + .Value' ${lb_file})
+        printline
+        GREEN "  Found LB info: ${lb}, with tag(s) matching infra:${INFRA_ID}"
+        GREEN "  LB Kub Service Name: '${lb_svc}'"
+        GREEN "  LB Kub Role: '${lb_role}'"
+        printline
+      else
+        PERR "LB ${arn} did not have tags matching infra:${INFRA_ID}"
+      fi
+    fi
+  done
+}
+
+# Fetch AWS security group information
+# Uses global variables: CLUSTER_RESOURCES, WRKDIR, clusterid, INFRA_ID
+get_security_groups_info() {
+  # Printing the security group IDs found in the install logs, for comparison to what we find in AWS using expected tags filters...
+  if [ -f ${CLUSTER_RESOURCES} ]; then
+    local resources_sgs
+    resources_sgs=$(jq -r '.. | strings' ${CLUSTER_RESOURCES} | grep -oE 'sg-[0-9a-f]+' | sort -u)
+    BLUE "Found the following AWS security group IDs in the ${CLUSTER_RESOURCES}..."
+  fi
+
+  # Fetch the security groups from AWS...
+  local sg_file="${WRKDIR}${clusterid}_security_groups.json"
+
+  if [ -f ${sg_file} ]; then
+    GREEN "Using existing security group file: ${sg_file}"
+  else
+    BLUE "Getting security groups with tags matching infra_id:${INFRA_ID} ..."
+    echo "aws ec2 describe-security-groups --filters \"Name=tag-value,Values=*${INFRA_ID}*\" --output json > ${sg_file}"
+    local sg_output
+    sg_output=$(aws ec2 describe-security-groups --filters "Name=tag-value,Values=*${INFRA_ID}*" --output json)
+    if [[ $? -eq 0 && -n "$sg_output" ]]; then
+      echo ${sg_output} > ${sg_file}
+    else
+      PERR "Erring fetching securtiy group info from AWS"
+    fi
+  fi
+  printline
+}
+
+# Fetch EC2 instance information, metrics, and console logs
+# Uses global variables: CLUSTER_EC2_INSTANCES, INFRA_ID
+get_ec2_instance_info() {
+  # Grab the EC2 Instances from aws...
+  if [ -f ${CLUSTER_EC2_INSTANCES} ]; then
+    GREEN "using existing ec2 instances file: ${CLUSTER_EC2_INSTANCES}"
+  else
+    # Dont filter these yet, previous checks included those for bad tags...
+    BLUE "Fetching ec2 instances from AWS..."
+    echo "aws ec2 describe-instances --query \"Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}\" --output json"
+    local instances_output
+    instances_output=$(aws ec2 describe-instances --query "Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}" --output json)
+    if [[ $? -eq 0 && -n "${instances_output}" ]]; then
+      echo ${instances_output} > ${CLUSTER_EC2_INSTANCES}
+    else
+      PERR "Failed to fetch EC2 Instances"
+    fi
+    printline
+  fi
+
+  if [ -f ${CLUSTER_EC2_INSTANCES} ]; then
+    # Parse the ec2 output into a table for viewing filter out the instances by our cluster tags.
+    # AI can chew on the raw json later...
+    echo """
+  jq --arg tag_str \"${INFRA_ID}\" -r '[\"INSTANCE_ID\", \"STATE\", \"NAME\"],
+    ([.[][] | select(.Tags[]? | .Value | contains(\$tag_str))] |
+    unique_by(.InstanceId) |
+    .[] |
+    [.InstanceId, .State, (.Tags[] | select(.Key==\"Name\") | .Value // \"N/A\")]) |
+    @tsv' ${CLUSTER_EC2_INSTANCES} | column -t
+  """
+
+    jq --arg tag_str "${INFRA_ID}" -r '["INSTANCE_ID", "AWS_STATE", "NAME"],
+    ([.[][] | select(.Tags[]? | .Value | contains($tag_str))] |
+    unique_by(.InstanceId) |
+    .[] |
+    [.InstanceId, .State, (.Tags[] | select(.Key=="Name") | .Value // "N/A")]) |
+    @tsv' ${CLUSTER_EC2_INSTANCES} | column -t
+
+    HDR "Getting EC2 instance metrics, and console logs"
+    # iterate over all the instance IDs found existing in AWS and grab their console logs...
+    jq --arg tag_str "${INFRA_ID}" -r '.[] | unique_by(.InstanceId)[]| select(.Tags[]? | .Value | contains($tag_str)) |.InstanceId' ${CLUSTER_EC2_INSTANCES} | while read vm; do
+      fetch_instance_console_logs "${vm}"
+      fetch_instance_cpu_percent_metrics "${vm}"
+      fetch_instance_mem_percent_metrics "${vm}"
+      fetch_instance_ebs_iops_exceeded "${vm}"
+      fetch_instance_ebs_througput_exceeded "${vm}"
+    done
+  else
+    PERR "No ec2 instances file found: '${CLUSTER_EC2_INSTANCES}'"
+  fi
+}
+
+# Fetch VPC endpoint service information for PrivateLink clusters
+# Uses global variables: PRIVATE_LINK, WRKDIR, cluster_id, INFRA_ID
+get_vpc_endpoint_service_info() {
+  # Attempt to gather VPC endpoint info from AWS based on our tags.
+  if [ ${PRIVATE_LINK} ]; then
+    HDR "Private Link detected getting VPC endpoint service info"
+    local vpc_epsrv_file="${WRKDIR}${cluster_id}_vpc_endpoint_service.json"
+    local vpc_ep_conn_file="${WRKDIR}${cluster_id}_vpc_endpoint_service_conns.json"
+
+    if [ -f ${vpc_epsrv_file} ]; then
+      GREEN "Using existing vpc endpoint service file: ${vpc_epsrv_file}"
+    else
+      BLUE "Fetching vpc endpoint service info from AWS..."
+      echo "aws ec2 describe-vpc-endpoint-service-configurations --filters \"Name=tag:Name,Values=${INFRA_ID}-vpc-endpoint-service\""
+      local vpcsrvout
+      vpcsrvout=$(aws ec2 describe-vpc-endpoint-service-configurations --filters "Name=tag:Name,Values=${INFRA_ID}-vpc-endpoint-service")
+      if [[ $? -ne 0 || -z "$vpcsrvout" ]]; then
+        PERR "Failed to fetch vpc service configuration from AWS"
+      else
+        echo "${vpcsrvout}" > ${vpc_epsrv_file}
+      fi
+    fi
+
+    if [ -f ${vpc_epsrv_file} ]; then
+      if [ -f ${vpc_ep_conn_file} ]; then
+        GREEN "Using existing vpc endpoint service connections file: ${vpc_ep_conn_file}"
+      else
+        BLUE "Fetching vpc endpoint service config id..."
+        echo "jq -r '.ServiceConfigurations[0].ServiceId' ${vpc_epsrv_file}"
+        local service_id
+        service_id=$(jq -r '.ServiceConfigurations[0].ServiceId' ${vpc_epsrv_file})
+        BLUE "Fetching vpc endpoint connections for serviceId: '${service_id}'"
+        echo "aws ec2 describe-vpc-endpoint-connections --filters \"Name=service-id,Values=${service_id}\""
+        local connout
+        connout=$(aws ec2 describe-vpc-endpoint-connections --filters "Name=service-id,Values=${service_id}")
+        if [[ $? -ne 0 || -z "${connout}" ]]; then
+          PERR "Failed to fetch vpc endpoint connections for: ${service_id}"
+        else
+          echo ${connout} > ${vpc_ep_conn_file}
+        fi
+      fi
+    fi
+  fi
+}
+
+# Fetch VPC information from AWS using tags
+# Uses global variables: WRKDIR, clusterid, INFRA_ID
+get_vpc_info() {
+  echo "Attempting to fetch AWS VPCs by tag values..."
+  local vpc_ids=""
+  local vpc_ids_file="${WRKDIR}${clusterid}_VPC_IDS.json"
+
+  if [ -f ${vpc_ids_file} ]; then
+    GREEN "Using existing vpc ids file: ${vpc_ids_file}"
+    vpc_ids=$(cat ${vpc_ids_file})
+  else
+    echo "fetching VPC ids from AWS..."
+    echo "aws ec2 describe-vpcs --filters \"Name=tag:Name,Values=*${INFRA_ID}*\" --query 'Vpcs[].VpcId' --output text"
+    vpc_ids=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=*${INFRA_ID}*" --query 'Vpcs[].VpcId' --output text)
+    if [ $? -ne 0 || -z "${vpc_ids}" ]; then
+      echo "Error fetching vpc ids from AWS"
+    else
+      echo ${vpc_ids} > ${vpc_ids_file}
+    fi
+  fi
+
+  if [ -z "${vpc_ids}" ]; then
+    PERR "Warning no VPC IDS found?"
+  else
+    BLUE "Found the following VPCs filtering for tags matching infra_id:'${INFRA_ID}':"
+    BLUE ${vpc_ids}
+    populate_vpc_info_files "${vpc_ids}"
+  fi
 }
 
 # Parse command-line arguments
 clusterid=""
 WRKDIR="."
+START_DATE=""
+ELAPSED_TIME=""
+PERIOD=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -134,6 +652,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     -d|--dir)
       WRKDIR="$2"
+      shift 2
+      ;;
+    -s|--start)
+      START_DATE="$2"
+      shift 2
+      ;;
+    -e|--elapsed)
+      ELAPSED_TIME="$2"
+      shift 2
+      ;;
+    -p|--period)
+      PERIOD="$2"
       shift 2
       ;;
     -h|--help)
@@ -166,9 +696,8 @@ if [ ! -d "${WRKDIR}" ]; then
     exit 1
   fi
 fi
-# Remove any trailing slashes, replace with a single slash. 
+# Remove any trailing slashes, replace with a single slash.
 WRKDIR="${WRKDIR%/}/"
-
 
 BLUE "This may require refreshing local AWS creds, example..."
 BLUE "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
@@ -234,6 +763,49 @@ else
     echo ${RESOUT} > ${CLUSTER_RESOURCES}
   fi
 fi
+
+
+# Determine elapsed time first (needed for ready cluster logic)
+if [ -n "${ELAPSED_TIME}" ]; then
+  CAPTURE_WINDOW=$(parse_elapsed_time "${ELAPSED_TIME}")
+  if [ $? -ne 0 ]; then
+    PERR "Failed to parse elapsed time"
+    exit 1
+  fi
+  BLUE "Using provided elapsed time: ${ELAPSED_TIME} (${CAPTURE_WINDOW})"
+else
+  CAPTURE_WINDOW="2 hours"
+  BLUE "Using default capture window: ${CAPTURE_WINDOW}"
+fi
+
+# Determine start date based on cluster state and provided arguments
+if [ -n "${START_DATE}" ]; then
+  # User provided explicit start date
+  CAPTURE_START="${START_DATE}"
+  CAPTURE_END=$(gdate -u -d "${CAPTURE_START} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
+  BLUE "Using provided start date: ${CAPTURE_START}"
+else
+  # Check cluster state
+  CLUSTER_STATE=$(jq -r '.state' ${CLUSTER_JSON})
+
+  if [ "${CLUSTER_STATE}" == "ready" ]; then
+    # For ready clusters, use current time as end and calculate start as (now - elapsed)
+    CAPTURE_END=$(gdate -u '+%Y-%m-%dT%H:%M:%SZ')
+    CAPTURE_START=$(gdate -u -d "${CAPTURE_END} - ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
+    BLUE "Cluster is in ready state - using current time window"
+    BLUE "Start: ${CAPTURE_START} (${CAPTURE_WINDOW} ago)"
+    BLUE "End: ${CAPTURE_END} (now)"
+  else
+    # For non-ready clusters, use cluster creation time
+    echo "\nFetching cluster create time to use for cloudtrail logs, and metrics..."
+    echo "CREATE_TIME=\$(jq -r '.creation_timestamp' ${CLUSTER_JSON})"
+    CREATE_TIME=$(jq -r '.creation_timestamp' ${CLUSTER_JSON})
+    CAPTURE_START=${CREATE_TIME}
+    CAPTURE_END=$(gdate -u -d "${CAPTURE_START} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
+    BLUE "Cluster is in ${CLUSTER_STATE} state - using cluster creation time as start date: ${CAPTURE_START}"
+  fi
+fi
+BLUE "Using capture start time: ${CAPTURE_START}, end time: ${CAPTURE_END}"
 
 DOMAIN_PREFIX=$(jq -r '.domain_prefix' ${CLUSTER_JSON})
 INFRA_ID=$(jq -r '.infra_id' ${CLUSTER_JSON})
@@ -305,7 +877,8 @@ populate_vpc_info_files() {
     fi
   done
 }
-
+# This is targeted at cluster provisioning errors and delays. Clusters
+# which become 'ready' may not have populated install logs in OCM cluster resources. 
 # Parse out the instance IDs and make a 'guess' at their roles from the install logs...
 # This will show all the instances used for the bootstrap + install phases, not necessarily ones still in use by the cluster
 if [ -f ${CLUSTER_RESOURCES} ]; then
@@ -483,267 +1056,40 @@ PYEOF3
   fi
 
 fi #end of code block 'if [ -f ${CLUSTER_RESOURCES}]...'
+
+
+####################################################################
+#        MAIN Collection section
+#        This section should rely on AWS artifact tags
+#        for collecting resource data, 
+#        not OCM's cluster resources/install logs. 
 ####################################################################
 
 
-# Attempt to gather VPC endpoint info from AWS based on our tags.
-if [ ${PRIVATE_LINK} ]; then
-  HDR "Private Link detected getting VPC endpoint service info"
-  VPC_EPSRV_FILE=${WRKDIR}${cluster_id}_vpc_endpoint_service.json
-  VPC_EP_CONN_FILE=${WRKDIR}${cluster_id}_vpc_endpoint_service_conns.json
-
-  if [ -f ${VPC_EPSRV_FILE} ]; then
-    GREEN "Using existing vpc endpoint service file: ${VPC_EPSRV_FILE}"
-  else
-    BLUE "Fetching vpc endpoint service info from AWS..."
-    echo "aws ec2 describe-vpc-endpoint-service-configurations --filters \"Name=tag:Name,Values=${INFRA_ID}-vpc-endpoint-service\""
-    VPCSRVOUT=$(aws ec2 describe-vpc-endpoint-service-configurations --filters "Name=tag:Name,Values=${INFRA_ID}-vpc-endpoint-service")
-    if [[ $? -ne 0 || -z "$VPCSRVOUT" ]]; then
-      PERR "Failed to fetch vpc service configuration from AWS"
-    else
-      echo "${VPCSRVOUT}" > ${VPC_EPSRV_FILE}
-    fi
-  fi
-
-  if [ -f ${VPC_EPSRV_FILE} ]; then
-    if [ -f ${VPC_EP_CONN_FILE} ]; then
-      GREEN "Using existing vpc endpoint service connections file: ${VPC_EP_CONN_FILE}"
-    else
-      BLUE "Fetching vpc endpoint service config id..."
-      echo "jq -r '.ServiceConfigurations[0].ServiceId' ${VPC_EPSRV_FILE}"
-      SERVICE_ID=$(jq -r '.ServiceConfigurations[0].ServiceId' ${VPC_EPSRV_FILE})
-      BLUE "Fetching vpc endpoint connections for serviceId: '${SERVICE_ID}'"
-      echo "aws ec2 describe-vpc-endpoint-connections --filters \"Name=service-id,Values=${SERVICE_ID}\""
-      CONNOUT=$(aws ec2 describe-vpc-endpoint-connections --filters "Name=service-id,Values=${SERVICE_ID}")
-      if [[ $? -ne 0 || -z "${CONNOUT}" ]]; then
-        PERR "Failed to fetch vpc endpoint connections for: ${SERVICE_ID}"
-      else
-        echo ${CONNOUT} > ${VPC_EP_CONN_FILE}
-      fi
-    fi
-  fi
-fi
-
-
+##############################
 HDR "Getting VPC info using infra id tags"
-# Fetch VPCs using method separate from install logs, will skip if VPC
-# info was already gathered for the VPCs found
-echo "Attempting to fetch AWS VPCs by tag values..."
-VPC_IDS=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=*${INFRA_ID}*" --query 'Vpcs[].VpcId' --output text)
-BLUE "Found the following VPCs filtering for tags matching infra_id:'${INFRA_ID}':"
-BLUE ${VPC_IDS}
-populate_vpc_info_files "${VPC_IDS}"
+get_vpc_info
 
-printline
+##############################
+HDR "Getting VPC endpoint service info"
+get_vpc_endpoint_service_info
+
+##############################
 HDR "Getting EC2 instance information"
-# Grab the EC2 Instances from aws...
-if [ -f ${CLUSTER_EC2_INSTANCES} ]; then
-  GREEN "using existing ec2 instances file: ${CLUSTER_EC2_INSTANCES}"
-else
-  # Dont filter these yet, previous checks included those for bad tags...
-  BLUE "Fetching ec2 instances from AWS..."
-  echo "aws ec2 describe-instances --query \"Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}\" --output json"
-  OUT=$(aws ec2 describe-instances --query "Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}" --output json)
-  if [[ $? -eq 0 && -n "${OUT}" ]]; then
-    echo ${OUT} > ${CLUSTER_EC2_INSTANCES}
-  else 
-    PERR "Failed to fetch EC2 Instances"
-  fi
-  printline
-fi
+get_ec2_instance_info
 
-if [ -f ${CLUSTER_EC2_INSTANCES} ]; then 
-  # Parse the ec2 output into a table for viewing filter out the instances by our cluster tags.
-  # AI can chew on the raw json later...
-  echo """
-  jq --arg tag_str \"${INFRA_ID}\" -r '[\"INSTANCE_ID\", \"STATE\", \"NAME\"],
-    ([.[][] | select(.Tags[]? | .Value | contains(\$tag_str))] |
-    unique_by(.InstanceId) |
-    .[] |
-    [.InstanceId, .State, (.Tags[] | select(.Key==\"Name\") | .Value // \"N/A\")]) |
-    @tsv' ${CLUSTER_EC2_INSTANCES} | column -t
-  """
-
-  jq --arg tag_str "${INFRA_ID}" -r '["INSTANCE_ID", "AWS_STATE", "NAME"],
-    ([.[][] | select(.Tags[]? | .Value | contains($tag_str))] |
-    unique_by(.InstanceId) |
-    .[] |
-    [.InstanceId, .State, (.Tags[] | select(.Key=="Name") | .Value // "N/A")]) |
-    @tsv' ${CLUSTER_EC2_INSTANCES} | column -t
-  printline
-fi
-
-HDR "Getting EC2 instance console logs"
-# iterate over all the instance IDs found existing in AWS and grab their console logs...
-BLUE "Getting console output for instances found in AWS..."
-jq --arg tag_str "f1l4r4k5d2p3a1l" -r '.[] | unique_by(.InstanceId)[]| select(.Tags[]? | .Value | contains($tag_str)) |.InstanceId' ${CLUSTER_EC2_INSTANCES} | while read vm; do
-  CONSOLE_FILE=${WRKDIR}${clusterid}_${vm}_console.log
-  echo "VM: ${vm}"
-  if [ -f ${CONSOLE_FILE} ]; then
-    GREEN "Using existing vm ${vm} console file: ${CONSOLE_FILE}"
-  else
-    BLUE "Getting console output for instance ${vm}"
-    echo "aws ec2 get-console-output --instance-id ${vm} --output text --query 'Output' > ${CONSOLE_FILE}"
-    OUT=$(aws ec2 get-console-output --instance-id ${vm} --output text --query 'Output')
-    if [[ $? -eq 0 && -n "${OUT}" ]]; then
-      echo $OUT > ${CONSOLE_FILE}
-    else 
-      PERR "FAiled to fetch ec2 console output for instance: ${vm}"
-    fi
-  fi
-done
-
+##############################
 HDR "Getting Cloud trail logs"
+get_cloud_trail_logs
 
-# Fetch the cloud trail logs to local file for parsing later...
-echo "\nFetching cluster create time to use for cloudtrail logs..."
-echo "CREATE_TIME=\$(jq -r '.creation_timestamp' ${CLUSTER_JSON})"
-CREATE_TIME=$(jq -r '.creation_timestamp' ${CLUSTER_JSON})
-CLUSTER_CT_LOGS="${WRKDIR}${clusterid}_cloudtrail.json"
-CAPTURE_WINDOW="2 hours"
-CAPTURE_START=${CREATE_TIME}
-CAPTURE_END=$(gdate -u -d "${CREATE_TIME} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
-CLUSTER_CT_LOGS="${WRKDIR}${clusterid}_${CAPTURE_START}.${CAPTURE_END}.cloudtrail.json"
-
-if [ -f ${CLUSTER_CT_LOGS} ]; then
-  GREEN "using existing cloudtrail logs: ${CLUSTER_CT_LOGS} "
-else
-  # This is currently using the cluster creation time as the start for the window and 2 hours for the size of the window.
-  # For PD alerts or issues not involving cluster installs, this should be adjusted using the timestamp of the alert
-  BLUE "Gathering cloudtrail logs for '${CAPTURE_WINDOW}' from '${CAPTURE_START}' to '${CAPTURE_END}' ..."
-  echo "aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END}  --output json | jq -c '.[]' > ${CLUSTER_CT_LOGS}"
-
-  CTOUT=$(aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --output json | jq -c '.[]') 
-  if [[ $? -eq 0 && -n "$CTOUT" ]]; then 
-    echo ${CTOUT} > ${CLUSTER_CT_LOGS}
-  else
-    PERR "Failed fetch cloudtrail info from AWS"
-  fi
-fi
-printline
-
-# Fetch the route53 info...
+##############################
 HDR "Getting route53 info..."
-BASE_DOMAIN=$(jq -r '.dns.base_domain' ${CLUSTER_JSON})
-BASE_DOMAIN="${DOMAIN_PREFIX}.${BASE_DOMAIN}"
-HOSTED_ZONES=${WRKDIR}${clusterid}_hosted_zones.json
+get_route53_info
 
-echo "BASE_DOMAIN=\"${DOMAIN_PREFIX}.${BASE_DOMAIN}\""
-
-
-if [ -f ${HOSTED_ZONES} ]; then
-  GREEN "using existing file: ${HOSTED_ZONES}"
-else
-  BLUE "fetching hosted zone for cluster domain ${BASE_DOMAIN}..."
-  echo "aws route53 list-hosted-zones --query \"HostedZones[?contains(Name, '${BASE_DOMAIN}')]\" --output json"
-  OUT=$(aws route53 list-hosted-zones --query "HostedZones[?contains(Name, '${BASE_DOMAIN}')]" --output json)
-  if [[ $? -eq 0 && -n "${OUT}" ]]; then
-      echo $OUT > ${HOSTED_ZONES}
-  else 
-      PERR "Failed to fetch hosted zones for domain ${BASE_DOMAIN}"
-  fi
-   
-fi
-ZONE_ID=""
-if [ -f ${HOSTED_ZONES} ]; then
-  echo "\nGetting hosted ZONE_ID from ${HOSTED_ZONES}..."
-  for ZONE_ID in $(jq -r '.[].Id | split("/")[2]'   ${HOSTED_ZONES}); do
-    if [ -n "$ZONE_ID" ]; then
-      RECORD_SETS=${WRKDIR}${clusterid}_route53_${ZONE_ID}.records.json
-      if [ -f ${RECORD_SETS} ]; then
-        GREEN "using existing file ${RECORD_SETS}"
-      else
-        BLUE "Fetching API records sets for hosted zone ${ZONE_ID} ..."
-        echo "aws route53 list-resource-record-sets --hosted-zone-id \"$ZONE_ID\" --output json"
-        RSOUT=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --output json)
-        if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
-          echo ${RSOUT} > ${RECORD_SETS}
-        else
-          PERR "Failed to get API record sets"
-        fi
-      fi
-    fi
-  done
-else
-  PERR "No zone found for cluster domain:'${BASE_DOMAIN}' ?"
-fi
-
-
+##############################
 HDR "Getting Security Group info"
-# Printing the security group IDs found in the install logs, for comparison to what we find in AWS using expected tags filters...
-if [ -f ${CLUSTER_RESOURCES} ]; then
-  RESOURCES_SGS=$(jq -r '.. | strings' ${CLUSTER_RESOURCES} | grep -oE 'sg-[0-9a-f]+' | sort -u)
-  BLUE "Found the following AWS security group IDs in the ${CLUSTER_RESOURCES}..."
-fi
+get_security_groups_info
 
-# Fetch the security groups from AWS...
-SG_FILE=${WRKDIR}${clusterid}_security_groups.json
-
-if [ -f ${SG_FILE} ]; then
-  GREEN "Using existing security group file: ${SG_FILE}"
-else
-  BLUE "Getting security groups with tags matching infra_id:${INFRA_ID} ..."
-  echo "aws ec2 describe-security-groups --filters \"Name=tag-value,Values=*${INFRA_ID}*\" --output json > ${SG_FILE}"
-  SGOUT=$(aws ec2 describe-security-groups --filters "Name=tag-value,Values=*${INFRA_ID}*" --output json)
-  if [[ $? -eq 0 && -n "$SGOUT" ]]; then 
-    echo ${SGOUT} > ${SG_FILE}
-  else
-    PERR "Erring fetching securtiy group info from AWS"
-  fi
-fi
-printline
-
+##############################
 HDR "Getting Load Balancers"
-LB_ALL_FILE=${WRKDIR}${clusterid}_LB_ALL.json
-if [ -f ${LB_ALL_FILE} ]; then
-  GREEN "Using existing all load balancers json file ${LB_ALL_FILE} ..."
-else
-  BLUE "Fetching all load balancers from AWS..."
-  echo "aws elbv2 describe-load-balancers --output json"
-  OUT=$(aws elbv2 describe-load-balancers --output json) 
-  if [[ $? -eq 0 && -n "$OUT" ]]; then 
-    echo ${OUT} > ${LB_ALL_FILE}
-  else
-    PERR "Failed to fetch load balancers from AWS"
-  fi
-fi
-
-
-echo """
-AWS LBs dont provide tags in the describe LB response, so
-a separate API call 'describe-tags' is need to create a tag <-> resource association. 
-Iterating over LBs found in ${LB_ALL_FILE} to get tag associations...
-jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE}
-"""
-jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE} | while read -r arn; do
-  lb="${arn##*/}"
-  LB_FILE="${WRKDIR}${clusterid}_LB_${lb}.json"
-  if [ -f ${LB_FILE} ]; then
-    GREEN "using existing load balancer file: ${LB_FILE}"
-  else
-    BLUE "Get AWS load balancer info for: $arn"
-    OUT=$(aws elbv2 describe-tags --resource-arns "$arn" --output json)
-    if [[ $? -ne 0 || -z "$OUT" ]]; then 
-      PERR "Failed to describe-tags for elb ${arn}" 
-    else
-      echo ${OUT} > ${LB_FILE}
-    fi
-  fi
-  if [ -f ${LB_FILE} ]; then
-    # Check if any tag contains the infra ID
-    echo "Looking for LB tags containing infra: '${INFRA_ID}'..."
-    echo "jq -r --arg infra \"${INFRA_ID}\" '.TagDescriptions[].Tags[] | select((.Value | contains(\$infra)) or (.Key | contains(\$infra))) | .Key + "=" + .Value' ${LB_FILE}"
-    MATCH=$(jq -r --arg infra "${INFRA_ID}" '.TagDescriptions[].Tags[] | select((.Value | contains($infra)) or (.Key | contains($infra))) | .Key + "=" + .Value' ${LB_FILE})
-    if [ -n "$MATCH" ]; then
-      LBSVC=$(jq -r '.TagDescriptions[].Tags[] | select(.Key == "kubernetes.io/service-name") | "Kub service-name: " + .Value' ${LB_FILE})
-      LBROLE=$(jq -r '.TagDescriptions[].Tags[] | select(.Key | contains("role")) | "Kub role: " + .Value' ${LB_FILE})
-      printline 
-      GREEN "  Found LB info: ${lb}, with tag(s) matching infra:${INFRA_ID}"
-      GREEN "  LB Kub Service Name: '${LBSVC}'"
-      GREEN "  LB Kub Role: '${LBROLE}'"
-      printline
-    else
-      PERR "LB ${arn} did not have tags matching infra:${INFRA_ID}"
-    fi
-  fi
-done
+get_load_balancers_info
