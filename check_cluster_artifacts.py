@@ -16,6 +16,7 @@ from typing import Dict, List, Tuple
 markdown_output = []  # Accumulate markdown output
 source_directory = Path('.')  # Source directory for cluster data files
 cluster_state = 'unknown'  # Cluster state (ready, error, installing, etc.)
+incident_date = None  # Incident timestamp for temporal filtering (datetime object)
 
 def add_markdown(text: str):
     """Add text to markdown output"""
@@ -89,8 +90,10 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
         search_terms: List of general terms to search for (e.g., API calls, error codes)
         required_resource_ids: List of specific resource IDs that MUST be present in events
         max_results: Maximum number of events to return
-    Returns: List of matching CloudTrail events
+    Returns: List of matching CloudTrail events (filtered by incident_date if set)
     """
+    global incident_date
+
     data = load_json_file(f"{cluster_id}_cloudtrail.json")
     if not data:
         return []
@@ -106,6 +109,20 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
         event_source = event.get('EventSource', '')
         username = event.get('Username', '')
         event_time = event.get('EventTime', '')
+
+        # Filter by incident date if set - only include events at or before incident
+        if incident_date and event_time:
+            try:
+                event_dt = datetime.strptime(event_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+
+                # Skip events that occurred after the incident
+                if event_dt > incident_date:
+                    continue
+            except (ValueError, AttributeError):
+                # If we can't parse the event time, skip this event when filtering is active
+                if incident_date:
+                    continue
 
         # Parse CloudTrailEvent JSON
         cloud_trail_event = event.get('CloudTrailEvent', '{}')
@@ -143,6 +160,25 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
                 event_id = ct_data.get('eventID', 'unknown')
                 request_params = ct_data.get('requestParameters', {})
 
+                # Calculate temporal relationship to incident if incident_date is set
+                temporal_relationship = None
+                if incident_date and event_time:
+                    try:
+                        event_dt = datetime.strptime(event_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+                        event_dt = event_dt.replace(tzinfo=timezone.utc)
+                        time_diff = (incident_date - event_dt).total_seconds()
+
+                        if time_diff < 0:
+                            temporal_relationship = f"AFTER incident ({abs(time_diff)/60:.1f} min)"
+                        elif time_diff < 60:
+                            temporal_relationship = f"DURING incident ({time_diff:.0f}s before)"
+                        elif time_diff < 3600:
+                            temporal_relationship = f"BEFORE incident ({time_diff/60:.1f} min before)"
+                        else:
+                            temporal_relationship = f"BEFORE incident ({time_diff/3600:.1f} hr before)"
+                    except (ValueError, AttributeError):
+                        temporal_relationship = "unknown"
+
                 # Add event to results
                 matching_events.append({
                     'event_name': event_name,
@@ -154,7 +190,8 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
                     'error_message': error_message[:200] if error_message else '',
                     'request_params': request_params,
                     'matched_terms': matched_terms,
-                    'full_event': ct_data
+                    'full_event': ct_data,
+                    'temporal_relationship': temporal_relationship
                 })
             else:
                 # No required resource IDs specified, use original logic
@@ -172,6 +209,25 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
                     event_id = ct_data.get('eventID', 'unknown')
                     request_params = ct_data.get('requestParameters', {})
 
+                    # Calculate temporal relationship to incident if incident_date is set
+                    temporal_relationship = None
+                    if incident_date and event_time:
+                        try:
+                            event_dt = datetime.strptime(event_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+                            event_dt = event_dt.replace(tzinfo=timezone.utc)
+                            time_diff = (incident_date - event_dt).total_seconds()
+
+                            if time_diff < 0:
+                                temporal_relationship = f"AFTER incident ({abs(time_diff)/60:.1f} min)"
+                            elif time_diff < 60:
+                                temporal_relationship = f"DURING incident ({time_diff:.0f}s before)"
+                            elif time_diff < 3600:
+                                temporal_relationship = f"BEFORE incident ({time_diff/60:.1f} min before)"
+                            else:
+                                temporal_relationship = f"BEFORE incident ({time_diff/3600:.1f} hr before)"
+                        except (ValueError, AttributeError):
+                            temporal_relationship = "unknown"
+
                     matching_events.append({
                         'event_name': event_name,
                         'event_source': event_source,
@@ -182,7 +238,8 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
                         'error_message': error_message[:200] if error_message else '',
                         'request_params': request_params,
                         'matched_terms': matched_terms,
-                        'full_event': ct_data
+                        'full_event': ct_data,
+                        'temporal_relationship': temporal_relationship
                     })
 
             if len(matching_events) >= max_results:
@@ -192,6 +249,168 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
             continue
 
     return matching_events
+
+def load_cloudwatch_metrics(cluster_id: str, instance_id: str, metric_name: str) -> Dict:
+    """
+    Load CloudWatch metrics from JSON file
+    Args:
+        cluster_id: The cluster ID used for file naming
+        instance_id: The EC2 instance ID
+        metric_name: The metric name (e.g., 'CPUUtilization', 'mem_used_percent')
+    Returns: CloudWatch metrics data or empty dict
+    """
+    global source_directory
+
+    # Find metric files matching the pattern: {cluster_id}_{instance_id}_{metric_name}_*.json
+    pattern = f"{cluster_id}_{instance_id}_{metric_name}_*.json"
+
+    try:
+        matching_files = list(source_directory.glob(pattern))
+        if not matching_files:
+            return {}
+
+        # Use the most recent file if multiple exist
+        metric_file = sorted(matching_files, key=lambda x: x.stat().st_mtime, reverse=True)[0]
+
+        with open(metric_file, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+        return {}
+
+def analyze_metric_datapoints(datapoints: List[Dict], threshold: float,
+                             metric_name: str, comparison: str = 'greater') -> Dict:
+    """
+    Analyze CloudWatch metric datapoints for threshold violations
+    Args:
+        datapoints: List of CloudWatch datapoint dicts
+        threshold: The threshold value to check against
+        metric_name: Name of the metric being analyzed
+        comparison: 'greater' or 'less' - how to compare values to threshold
+    Returns: Dict with analysis results
+    """
+    global incident_date
+
+    if not datapoints:
+        return {'violations': 0, 'max_value': None, 'min_value': None, 'avg_value': None}
+
+    violations = 0
+    values = []
+    violation_times = []
+
+    for dp in datapoints:
+        timestamp_str = dp.get('Timestamp', '')
+        value = dp.get('Average') or dp.get('Sum') or dp.get('Maximum')
+
+        if value is None:
+            continue
+
+        values.append(value)
+
+        # Filter by incident date if set
+        if incident_date and timestamp_str:
+            try:
+                dp_time = datetime.strptime(timestamp_str, '%Y-%m-%dT%H:%M:%SZ')
+                dp_time = dp_time.replace(tzinfo=timezone.utc)
+
+                # Skip datapoints after incident
+                if dp_time > incident_date:
+                    continue
+            except (ValueError, AttributeError):
+                continue
+
+        # Check threshold violation
+        if comparison == 'greater' and value > threshold:
+            violations += 1
+            violation_times.append(timestamp_str)
+        elif comparison == 'less' and value < threshold:
+            violations += 1
+            violation_times.append(timestamp_str)
+
+    return {
+        'violations': violations,
+        'max_value': max(values) if values else None,
+        'min_value': min(values) if values else None,
+        'avg_value': sum(values) / len(values) if values else None,
+        'total_datapoints': len(values),
+        'violation_times': violation_times[:5]  # Keep first 5 violation timestamps
+    }
+
+def parse_console_log_for_errors(console_log_path: Path) -> Dict:
+    """
+    Parse EC2 console log for critical errors, warnings, and failures
+    Args:
+        console_log_path: Path to console log file
+    Returns: Dict with categorized errors
+    """
+    global incident_date
+
+    errors = {
+        'kernel_panics': [],
+        'out_of_memory': [],
+        'disk_errors': [],
+        'network_errors': [],
+        'service_failures': [],
+        'ignition_errors': [],
+        'systemd_failures': [],
+        'other_errors': []
+    }
+
+    if not console_log_path.exists():
+        return errors
+
+    try:
+        with open(console_log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                line_lower = line.lower()
+
+                # Extract timestamp if present (common format: [timestamp])
+                # Skip lines if they're after incident_date
+                # Note: Console logs may not have parseable timestamps
+
+                # Kernel panics
+                if 'kernel panic' in line_lower or 'panic:' in line_lower:
+                    errors['kernel_panics'].append((line_num, line.strip()[:200]))
+
+                # OOM (Out of Memory)
+                elif 'out of memory' in line_lower or 'oom' in line_lower or 'killed process' in line_lower:
+                    errors['out_of_memory'].append((line_num, line.strip()[:200]))
+
+                # Disk/Storage errors
+                elif any(x in line_lower for x in ['i/o error', 'disk error', 'ext4-fs error',
+                                                     'xfs error', 'read-only file system']):
+                    errors['disk_errors'].append((line_num, line.strip()[:200]))
+
+                # Network errors
+                elif any(x in line_lower for x in ['network unreachable', 'no route to host',
+                                                     'connection refused', 'failed to reach']):
+                    errors['network_errors'].append((line_num, line.strip()[:200]))
+
+                # Ignition errors (OpenShift provisioning)
+                elif 'ignition' in line_lower and ('error' in line_lower or 'failed' in line_lower):
+                    errors['ignition_errors'].append((line_num, line.strip()[:200]))
+
+                # Systemd failures
+                elif 'systemd' in line_lower and ('failed' in line_lower or 'failure' in line_lower):
+                    errors['systemd_failures'].append((line_num, line.strip()[:200]))
+
+                # Service failures
+                elif any(x in line_lower for x in ['service failed', 'unit failed',
+                                                     'failed to start', 'fatal error']):
+                    errors['service_failures'].append((line_num, line.strip()[:200]))
+
+                # Generic errors
+                elif 'error:' in line_lower or 'critical:' in line_lower:
+                    errors['other_errors'].append((line_num, line.strip()[:200]))
+
+                # Limit entries per category to avoid memory issues
+                for key in errors:
+                    if len(errors[key]) > 50:
+                        errors[key] = errors[key][:50]
+
+    except (PermissionError, OSError) as e:
+        pass
+
+    return errors
 
 def get_cluster_resource_ids(cluster_id: str, infra_id: str) -> Dict:
     """
@@ -722,6 +941,22 @@ def print_cloudtrail_correlation(events: List[Dict], context: str, cluster_id: s
         print(f"  {Colors.BOLD}Event {i}:{Colors.END}")
         print(f"    Event ID: {evt.get('event_id', 'unknown')}")
         print(f"    Time: {evt['event_time']}")
+
+        # Show temporal relationship to incident if available
+        if evt.get('temporal_relationship'):
+            time_rel = evt['temporal_relationship']
+            if 'BEFORE' in time_rel:
+                color = Colors.YELLOW
+                print(f"    {color}Timing: {time_rel} ← Potential cause{Colors.END}")
+            elif 'DURING' in time_rel:
+                color = Colors.RED
+                print(f"    {color}Timing: {time_rel} ← Likely cause{Colors.END}")
+            elif 'AFTER' in time_rel:
+                color = Colors.GREEN
+                print(f"    {color}Timing: {time_rel} ← Not a cause (after incident){Colors.END}")
+            else:
+                print(f"    Timing: {time_rel}")
+
         print(f"    Action: {evt['event_name']} ({evt['event_source']})")
         print(f"    User: {evt['username']}")
 
@@ -1792,7 +2027,13 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
         infra_id: The infrastructure ID (if None, will derive from cluster_id)
     Returns: (status, list of issues)
     """
+    global incident_date
     print_header("CloudTrail Logs Health Check")
+
+    # Show incident date filter status
+    if incident_date:
+        print(f"{Colors.YELLOW}Filtering events: Only analyzing events at or before incident time{Colors.END}")
+        print(f"{Colors.YELLOW}Incident Date: {incident_date.strftime('%Y-%m-%d %H:%M:%S UTC')}{Colors.END}\n")
 
     data = load_json_file(f"{cluster_id}_cloudtrail.json")
     if not data:
@@ -1827,12 +2068,30 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
         'Cancel', 'Reject', 'Deny'
     ]
 
+    filtered_events_count = 0  # Track events filtered out by incident date
+
     for event in events:
         event_name = event.get('EventName', 'unknown')
         event_source = event.get('EventSource', 'unknown')
         read_only = event.get('ReadOnly', 'true')
         event_time = event.get('EventTime', '')
         username = event.get('Username', '')
+
+        # Filter by incident date if set - skip events after incident
+        if incident_date and event_time:
+            try:
+                event_dt = datetime.strptime(event_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+
+                # Skip events that occurred after the incident
+                if event_dt > incident_date:
+                    filtered_events_count += 1
+                    continue
+            except (ValueError, AttributeError):
+                # If we can't parse the event time, skip this event when filtering is active
+                if incident_date:
+                    filtered_events_count += 1
+                    continue
 
         # Initialize counters if not exists
         if event_source not in event_sources:
@@ -1918,6 +2177,15 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
             # If JSON parsing fails, count as success (can't determine error status)
             event_sources[event_source]['success'] += 1
             event_names[event_name]['success'] += 1
+
+    # Show filtering summary if incident_date was used
+    if incident_date:
+        analyzed_count = len(events) - filtered_events_count
+        print(f"\n{Colors.BOLD}Incident Date Filtering Summary:{Colors.END}")
+        print(f"  Total Events in File: {len(events)}")
+        print(f"  Events AFTER Incident (filtered out): {filtered_events_count}")
+        print(f"  Events AT or BEFORE Incident (analyzed): {analyzed_count}")
+        print(f"  {Colors.YELLOW}Only events before/during incident are analyzed for root cause{Colors.END}")
 
     print(f"\nTop Event Sources:")
     for source, counts in sorted(event_sources.items(), key=lambda x: x[1]['success'] + x[1]['error'], reverse=True)[:5]:
@@ -3027,6 +3295,395 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
 
     return str(filepath)
 
+def check_ec2_metrics(cluster_id: str, infra_id: str) -> Tuple[str, List[str]]:
+    """
+    Check EC2 CloudWatch metrics for resource exhaustion and performance issues
+    Args:
+        cluster_id: The cluster ID
+        infra_id: The infrastructure ID
+    Returns: (status, list of issues)
+    """
+    global incident_date
+    print_header("EC2 CloudWatch Metrics Health Check")
+
+    if incident_date:
+        print(f"{Colors.YELLOW}Filtering metrics: Only analyzing datapoints at or before incident time{Colors.END}")
+        print(f"{Colors.YELLOW}Incident Date: {incident_date.strftime('%Y-%m-%d %H:%M:%S UTC')}{Colors.END}\n")
+
+    issues = []
+
+    # Get list of cluster instances
+    instances_data = load_json_file(f"{cluster_id}_ec2_instances.json")
+    if not instances_data:
+        return ("WARNING", ["EC2 instances file not found"])
+
+    instances = []
+    if isinstance(instances_data, list):
+        for item in instances_data:
+            if isinstance(item, list):
+                instances.extend(item)
+            else:
+                instances.append(item)
+
+    # Filter instances belonging to this cluster
+    cluster_instances = []
+    for instance in instances:
+        tags = instance.get('Tags', [])
+        if any(infra_id in str(tag.get('Value', '')) for tag in tags):
+            instance_id = instance.get('InstanceId')
+            instance_name = next((tag.get('Value') for tag in tags if tag.get('Key') == 'Name'), instance_id)
+            instance_state = instance.get('State', 'unknown')
+            cluster_instances.append({
+                'id': instance_id,
+                'name': instance_name,
+                'state': instance_state
+            })
+
+    if not cluster_instances:
+        return ("WARNING", ["No cluster instances found to analyze"])
+
+    print(f"Found {len(cluster_instances)} cluster instance(s) to analyze\n")
+
+    # Thresholds
+    CPU_HIGH_THRESHOLD = 80.0  # %
+    MEMORY_HIGH_THRESHOLD = 90.0  # %
+
+    critical_issues = []
+    warning_issues = []
+
+    for inst in cluster_instances:
+        instance_id = inst['id']
+        instance_name = inst['name']
+
+        print(f"{Colors.BOLD}Instance: {instance_name} ({instance_id}){Colors.END}")
+
+        # 1. Check CPU Utilization
+        cpu_data = load_cloudwatch_metrics(cluster_id, instance_id, 'CPUUtilization')
+        if cpu_data and cpu_data.get('Datapoints'):
+            cpu_analysis = analyze_metric_datapoints(
+                cpu_data['Datapoints'],
+                CPU_HIGH_THRESHOLD,
+                'CPUUtilization',
+                'greater'
+            )
+
+            if cpu_analysis['avg_value'] is not None:
+                avg_cpu = cpu_analysis['avg_value']
+                max_cpu = cpu_analysis['max_value']
+                violations = cpu_analysis['violations']
+
+                print(f"  CPU Utilization: Avg={avg_cpu:.1f}%, Max={max_cpu:.1f}%")
+
+                if violations > 0:
+                    if max_cpu >= 95:
+                        msg = f"CRITICAL: Instance {instance_name} CPU at {max_cpu:.1f}% ({violations} violations)"
+                        critical_issues.append(msg)
+                        print(f"    {Colors.RED}✗ {msg}{Colors.END}")
+                    else:
+                        msg = f"Instance {instance_name} CPU high: {max_cpu:.1f}% ({violations} violations)"
+                        warning_issues.append(msg)
+                        print(f"    {Colors.YELLOW}⚠ {msg}{Colors.END}")
+                else:
+                    print(f"    {Colors.GREEN}✓ CPU utilization normal{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ CPU metrics not available{Colors.END}")
+
+        # 2. Check Memory Utilization
+        mem_data = load_cloudwatch_metrics(cluster_id, instance_id, 'mem_used_percent')
+        if mem_data and mem_data.get('Datapoints'):
+            mem_analysis = analyze_metric_datapoints(
+                mem_data['Datapoints'],
+                MEMORY_HIGH_THRESHOLD,
+                'mem_used_percent',
+                'greater'
+            )
+
+            if mem_analysis['avg_value'] is not None:
+                avg_mem = mem_analysis['avg_value']
+                max_mem = mem_analysis['max_value']
+                violations = mem_analysis['violations']
+
+                print(f"  Memory Utilization: Avg={avg_mem:.1f}%, Max={max_mem:.1f}%")
+
+                if violations > 0:
+                    if max_mem >= 95:
+                        msg = f"CRITICAL: Instance {instance_name} Memory at {max_mem:.1f}% ({violations} violations)"
+                        critical_issues.append(msg)
+                        print(f"    {Colors.RED}✗ {msg}{Colors.END}")
+                    else:
+                        msg = f"Instance {instance_name} Memory high: {max_mem:.1f}% ({violations} violations)"
+                        warning_issues.append(msg)
+                        print(f"    {Colors.YELLOW}⚠ {msg}{Colors.END}")
+                else:
+                    print(f"    {Colors.GREEN}✓ Memory utilization normal{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ Memory metrics not available (CloudWatch agent may not be installed){Colors.END}")
+
+        # 3. Check EBS IOPS Exceeded
+        iops_data = load_cloudwatch_metrics(cluster_id, instance_id, 'InstanceEBSIOPSExceededCheck')
+        if iops_data and iops_data.get('Datapoints'):
+            iops_analysis = analyze_metric_datapoints(
+                iops_data['Datapoints'],
+                0.5,  # Any value > 0.5 indicates exceeded
+                'InstanceEBSIOPSExceededCheck',
+                'greater'
+            )
+
+            if iops_analysis['max_value'] and iops_analysis['max_value'] > 0:
+                msg = f"Instance {instance_name} exceeded EBS IOPS limits ({iops_analysis['violations']} times)"
+                critical_issues.append(msg)
+                print(f"  {Colors.RED}✗ EBS IOPS: {msg}{Colors.END}")
+            else:
+                print(f"  {Colors.GREEN}✓ EBS IOPS within limits{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ EBS IOPS metrics not available{Colors.END}")
+
+        # 4. Check EBS Throughput Exceeded
+        throughput_data = load_cloudwatch_metrics(cluster_id, instance_id, 'InstanceEBSThroughputExceededCheck')
+        if throughput_data and throughput_data.get('Datapoints'):
+            throughput_analysis = analyze_metric_datapoints(
+                throughput_data['Datapoints'],
+                0.5,
+                'InstanceEBSThroughputExceededCheck',
+                'greater'
+            )
+
+            if throughput_analysis['max_value'] and throughput_analysis['max_value'] > 0:
+                msg = f"Instance {instance_name} exceeded EBS throughput limits ({throughput_analysis['violations']} times)"
+                critical_issues.append(msg)
+                print(f"  {Colors.RED}✗ EBS Throughput: {msg}{Colors.END}")
+            else:
+                print(f"  {Colors.GREEN}✓ EBS throughput within limits{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ EBS throughput metrics not available{Colors.END}")
+
+        # 5. Check ENI Bandwidth In Exceeded
+        bw_in_data = load_cloudwatch_metrics(cluster_id, instance_id, 'bw_in_allowance_exceeded')
+        if bw_in_data and bw_in_data.get('Datapoints'):
+            bw_in_analysis = analyze_metric_datapoints(
+                bw_in_data['Datapoints'],
+                0,
+                'bw_in_allowance_exceeded',
+                'greater'
+            )
+
+            if bw_in_analysis['max_value'] and bw_in_analysis['max_value'] > 0:
+                total_exceeded = bw_in_analysis['max_value']
+                msg = f"Instance {instance_name} exceeded network bandwidth IN allowance ({int(total_exceeded)} times)"
+                critical_issues.append(msg)
+                print(f"  {Colors.RED}✗ Network Bandwidth IN: {msg}{Colors.END}")
+            else:
+                print(f"  {Colors.GREEN}✓ Network bandwidth IN within limits{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ Network bandwidth IN metrics not available{Colors.END}")
+
+        # 6. Check ENI Bandwidth Out Exceeded
+        bw_out_data = load_cloudwatch_metrics(cluster_id, instance_id, 'bw_out_allowance_exceeded')
+        if bw_out_data and bw_out_data.get('Datapoints'):
+            bw_out_analysis = analyze_metric_datapoints(
+                bw_out_data['Datapoints'],
+                0,
+                'bw_out_allowance_exceeded',
+                'greater'
+            )
+
+            if bw_out_analysis['max_value'] and bw_out_analysis['max_value'] > 0:
+                total_exceeded = bw_out_analysis['max_value']
+                msg = f"Instance {instance_name} exceeded network bandwidth OUT allowance ({int(total_exceeded)} times)"
+                critical_issues.append(msg)
+                print(f"  {Colors.RED}✗ Network Bandwidth OUT: {msg}{Colors.END}")
+            else:
+                print(f"  {Colors.GREEN}✓ Network bandwidth OUT within limits{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ Network bandwidth OUT metrics not available{Colors.END}")
+
+        # 7. Check ENI PPS Exceeded
+        pps_data = load_cloudwatch_metrics(cluster_id, instance_id, 'pps_allowance_exceeded')
+        if pps_data and pps_data.get('Datapoints'):
+            pps_analysis = analyze_metric_datapoints(
+                pps_data['Datapoints'],
+                0,
+                'pps_allowance_exceeded',
+                'greater'
+            )
+
+            if pps_analysis['max_value'] and pps_analysis['max_value'] > 0:
+                total_exceeded = pps_analysis['max_value']
+                msg = f"Instance {instance_name} exceeded network PPS allowance ({int(total_exceeded)} times)"
+                critical_issues.append(msg)
+                print(f"  {Colors.RED}✗ Network PPS: {msg}{Colors.END}")
+            else:
+                print(f"  {Colors.GREEN}✓ Network PPS within limits{Colors.END}")
+        else:
+            print(f"  {Colors.YELLOW}⚠ Network PPS metrics not available{Colors.END}")
+
+        print()
+
+    # Combine issues
+    all_issues = critical_issues + warning_issues
+
+    # Determine status
+    if critical_issues:
+        status = "ERROR"
+    elif warning_issues:
+        status = "WARNING"
+    else:
+        status = "OK"
+
+    return (status, all_issues)
+
+def check_ec2_console_logs(cluster_id: str, infra_id: str) -> Tuple[str, List[str]]:
+    """
+    Check EC2 console logs for boot errors, kernel panics, and service failures
+    Args:
+        cluster_id: The cluster ID
+        infra_id: The infrastructure ID
+    Returns: (status, list of issues)
+    """
+    global source_directory
+    print_header("EC2 Console Logs Health Check")
+
+    issues = []
+
+    # Get list of cluster instances
+    instances_data = load_json_file(f"{cluster_id}_ec2_instances.json")
+    if not instances_data:
+        return ("WARNING", ["EC2 instances file not found"])
+
+    instances = []
+    if isinstance(instances_data, list):
+        for item in instances_data:
+            if isinstance(item, list):
+                instances.extend(item)
+            else:
+                instances.append(item)
+
+    # Filter instances belonging to this cluster
+    cluster_instances = []
+    for instance in instances:
+        tags = instance.get('Tags', [])
+        if any(infra_id in str(tag.get('Value', '')) for tag in tags):
+            instance_id = instance.get('InstanceId')
+            instance_name = next((tag.get('Value') for tag in tags if tag.get('Key') == 'Name'), instance_id)
+            cluster_instances.append({
+                'id': instance_id,
+                'name': instance_name
+            })
+
+    if not cluster_instances:
+        return ("WARNING", ["No cluster instances found to analyze"])
+
+    print(f"Found {len(cluster_instances)} instance console log(s) to analyze\n")
+
+    critical_errors = 0
+    warning_errors = 0
+
+    for inst in cluster_instances:
+        instance_id = inst['id']
+        instance_name = inst['name']
+
+        # Find console log file
+        console_log_path = source_directory / f"{cluster_id}_{instance_id}_console.log"
+
+        if not console_log_path.exists():
+            print(f"{Colors.YELLOW}⚠ Console log not found for {instance_name} ({instance_id}){Colors.END}")
+            continue
+
+        print(f"{Colors.BOLD}Instance: {instance_name} ({instance_id}){Colors.END}")
+
+        # Parse console log
+        errors = parse_console_log_for_errors(console_log_path)
+
+        # Report findings
+        has_errors = False
+
+        if errors['kernel_panics']:
+            has_errors = True
+            critical_errors += len(errors['kernel_panics'])
+            msg = f"CRITICAL: {instance_name} - Kernel panic detected ({len(errors['kernel_panics'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.RED}✗ {msg}{Colors.END}")
+            for line_num, error_line in errors['kernel_panics'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['out_of_memory']:
+            has_errors = True
+            critical_errors += len(errors['out_of_memory'])
+            msg = f"CRITICAL: {instance_name} - Out of Memory errors ({len(errors['out_of_memory'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.RED}✗ {msg}{Colors.END}")
+            for line_num, error_line in errors['out_of_memory'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['disk_errors']:
+            has_errors = True
+            critical_errors += len(errors['disk_errors'])
+            msg = f"CRITICAL: {instance_name} - Disk/I/O errors ({len(errors['disk_errors'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.RED}✗ {msg}{Colors.END}")
+            for line_num, error_line in errors['disk_errors'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['network_errors']:
+            has_errors = True
+            warning_errors += len(errors['network_errors'])
+            msg = f"WARNING: {instance_name} - Network connectivity errors ({len(errors['network_errors'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.YELLOW}⚠ {msg}{Colors.END}")
+            for line_num, error_line in errors['network_errors'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['ignition_errors']:
+            has_errors = True
+            critical_errors += len(errors['ignition_errors'])
+            msg = f"CRITICAL: {instance_name} - Ignition provisioning errors ({len(errors['ignition_errors'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.RED}✗ {msg}{Colors.END}")
+            for line_num, error_line in errors['ignition_errors'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['systemd_failures']:
+            has_errors = True
+            warning_errors += len(errors['systemd_failures'])
+            msg = f"WARNING: {instance_name} - Systemd service failures ({len(errors['systemd_failures'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.YELLOW}⚠ {msg}{Colors.END}")
+            for line_num, error_line in errors['systemd_failures'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['service_failures']:
+            has_errors = True
+            warning_errors += len(errors['service_failures'])
+            msg = f"WARNING: {instance_name} - Service failures ({len(errors['service_failures'])} occurrence(s))"
+            issues.append(msg)
+            print(f"  {Colors.YELLOW}⚠ {msg}{Colors.END}")
+            for line_num, error_line in errors['service_failures'][:3]:
+                print(f"    Line {line_num}: {error_line}")
+
+        if errors['other_errors']:
+            # Only report if significant
+            if len(errors['other_errors']) > 10:
+                has_errors = True
+                warning_errors += 1
+                msg = f"WARNING: {instance_name} - Multiple generic errors found ({len(errors['other_errors'])} occurrence(s))"
+                issues.append(msg)
+                print(f"  {Colors.YELLOW}⚠ {msg}{Colors.END}")
+
+        if not has_errors:
+            print(f"  {Colors.GREEN}✓ No critical errors found in console log{Colors.END}")
+
+        print()
+
+    # Determine status
+    if critical_errors > 0:
+        status = "ERROR"
+    elif warning_errors > 0:
+        status = "WARNING"
+    else:
+        status = "OK"
+
+    return (status, issues)
+
 def main():
     """Main health check function"""
     global markdown_output, source_directory, cluster_state
@@ -3062,8 +3719,29 @@ Notes:
         default='.',
         help='Source directory containing cluster JSON and log files (default: current directory)'
     )
+    parser.add_argument(
+        '--incident-date',
+        type=str,
+        default=None,
+        metavar='YYYY-MM-DDTHH:MM:SSZ',
+        help='Timestamp when cluster health degraded (format: YYYY-MM-DDTHH:MM:SSZ). '
+             'Events after this time will be marked as irrelevant to the incident.'
+    )
 
     args = parser.parse_args()
+
+    # Parse and validate incident date if provided
+    global incident_date
+    if args.incident_date:
+        try:
+            incident_date = datetime.strptime(args.incident_date, '%Y-%m-%dT%H:%M:%SZ')
+            incident_date = incident_date.replace(tzinfo=timezone.utc)
+            print(f"{Colors.BOLD}Incident Date: {incident_date.strftime('%Y-%m-%d %H:%M:%S UTC')}{Colors.END}")
+            print(f"{Colors.YELLOW}Filtering events: Only showing events at or before incident time{Colors.END}\n")
+        except ValueError as e:
+            print_status("ERROR", f"Invalid incident-date format: {args.incident_date}")
+            print(f"Expected format: YYYY-MM-DDTHH:MM:SSZ (e.g., 2025-01-15T14:30:00Z)")
+            sys.exit(1)
 
     # Set source directory
     source_directory = Path(args.directory).resolve()
@@ -3156,6 +3834,12 @@ Notes:
     results['load_balancers'] = check_load_balancers(cluster_id, infra_id)
     results['route53'] = check_route53(cluster_id)
     results['cloudtrail'] = check_cloudtrail_logs(cluster_id, infra_id)
+
+    # Check EC2 CloudWatch metrics for resource exhaustion
+    results['ec2_metrics'] = check_ec2_metrics(cluster_id, infra_id)
+
+    # Check EC2 console logs for errors
+    results['ec2_console_logs'] = check_ec2_console_logs(cluster_id, infra_id)
 
     # Summary (terminal output only - markdown summary is generated in write_markdown_report)
     print(f"\n{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}")
