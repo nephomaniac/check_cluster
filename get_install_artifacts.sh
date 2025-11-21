@@ -94,9 +94,13 @@ NOTES:
 EOF
 }
 
+PERR() {
+    echo -e "\033[1;31m$1\033[0m"
+}
+
 # Parse command-line arguments
 clusterid=""
-directory="."
+WRKDIR="."
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -105,7 +109,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -d|--dir)
-      directory="$2"
+      WRKDIR="$2"
       shift 2
       ;;
     -h|--help)
@@ -123,37 +127,32 @@ done
 
 # Validate cluster ID was provided
 if [ -z "${clusterid}" ]; then
-  echo "Error: Cluster ID is required" >&2
+  PERR "Error: Cluster ID is required" >&2
   echo ""
   show_help
   exit 1
 fi
 
-# Handle directory - create if needed and change to it
-if [ ! -d "${directory}" ]; then
-  echo "Creating directory: ${directory}"
-  mkdir -p "${directory}"
+# Handle WRKDIR - create if needed and change to it
+if [ ! -d "${WRKDIR}" ]; then
+  echo "Creating directory: ${WRKDIR}"
+  mkdir -p "${WRKDIR}"
   if [ $? -ne 0 ]; then
-    echo "Error: Failed to create directory: ${directory}" >&2
+    PERR "Error: Failed to create directory: ${WRKDIR}" >&2
     exit 1
   fi
 fi
+# Remove any trailing slashes, replace with a single slash. 
+WRKDIR="${WRKDIR%/}/"
 
-echo "Changing to directory: ${directory}"
-cd "${directory}" || {
-  echo "Error: Failed to change to directory: ${directory}" >&2
-  exit 1
-}
 
-echo "Starting data collection for cluster: ${clusterid}"
-echo "Working directory: $(pwd)"
 echo "This may require refreshing local AWS creds, example..."
 echo "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
 echo ""
-CLUSTER_JSON="${clusterid}_cluster.json"
-CLUSTER_CTX_FILE="${clusterid}_cluster_context.json"
-CLUSTER_RESOURCES="${clusterid}_resources.json"
-CLUSTER_EC2_INSTANCES="${clusterid}_ec2_instances.json"
+CLUSTER_JSON="${WRKDIR}${clusterid}_cluster.json"
+CLUSTER_CTX_FILE="${WRKDIR}${clusterid}_cluster_context.json"
+CLUSTER_RESOURCES="${WRKDIR}${clusterid}_resources.json"
+CLUSTER_EC2_INSTANCES="${WRKDIR}${clusterid}_ec2_instances.json"
 
 printline() {
   local char="${1:--}"
@@ -166,11 +165,13 @@ if [ -f ${CLUSTER_JSON} ]; then
 else
   echo "Fetching ocm cluster info..."
   echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid} > ${CLUSTER_JSON}"
-  ocm get /api/clusters_mgmt/v1/clusters/${clusterid} > ${CLUSTER_JSON}
+  OUT=$(ocm get /api/clusters_mgmt/v1/clusters/${clusterid}) 
   if [ $? -ne 0 ]; then
-    echo "Failed to get cluster from ocm? "
-    echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid} > ${CLUSTER_JSON}"
+    PERR "Failed to get cluster from ocm? "
+    PERR "ocm get /api/clusters_mgmt/v1/clusters/${clusterid}"
     exit 1
+  else
+    echo $OUT > ${CLUSTER_JSON}
   fi
 fi
 
@@ -181,7 +182,7 @@ else
   echo "osdctl cluster context  -C ${clusterid} -o json"
   CLUSTER_CTX=$(osdctl cluster context  -C ${clusterid} -o json)
   if [ $? -ne 0 ]; then
-    echo "WARNING - failed to fetch cluster context for cluster:'${clusterid}'"
+    PERR "WARNING - failed to fetch cluster context for cluster:'${clusterid}'"
   else 
     echo ${CLUSTER_CTX} > ${CLUSTER_CTX_FILE}
   fi
@@ -194,21 +195,21 @@ else
   echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources"
   RESOUT=$(ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources)
   if [ $? -ne 0 ]; then
-    echo "Failed to get cluster resources?"
+    PERR "Failed to get cluster resources?"
     echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources > ${CLUSTER_RESOURCES}"
     exit 1
   fi
   # Check if cluster resources, install logs are empty. This is expected for a ready cluster. 
   RES=$(echo ${RESOUT} | jq -r 'if .resources == null then "empty" else "notNull" end' 2> /dev/null)
-  if [ "empty" == "${RES}" ]; then 
-    echo "Cluster resources not found for this cluster" 
+  if [ "empty" == "${RES}" ]; then  
     CSTATE=$(jq -r '.state' ${CLUSTER_JSON})
     echo "Cluster state:${CSTATE}"
     if [ "${CSTATE}" == "ready" ]; then
-      echo "Cluster resources are not expected for clusters in ready state"
+      PERR "Cluster OCM resources (install logs) are not expected for clusters in ready state"
     else 
-      echo "Cluster is in ${CSTATE} state, new clusters in non-ready state may need to wait for this to be populated"
-      echo "Can run this command again later to retry, will attempt to gather info from AWS without this for now"
+      PERR "Cluster resources not found for this cluster"
+      PERR "Cluster is in ${CSTATE} state, new clusters in non-ready state may need to wait for this to be populated"
+      PERR "Can run this command again later to retry, will attempt to gather info from AWS without this for now"
     fi
   else  
     echo ${RESOUT} > ${CLUSTER_RESOURCES}
@@ -226,9 +227,9 @@ populate_vpc_info_files() {
   local VPC_IDS="$*"
   echo "Found the following VPC ids in cluster resources install logs:\n${VPC_IDS}"
   for VPC in ${VPC_IDS}; do
-    local VPC_FILE="${clusterid}_${VPC}_VPC.json"
-    local VPC_FILE_DNS_HOST="${clusterid}_${VPC}_VPC_attrDnsHost.json"
-    local VPC_FILE_DNS_SUPP="${clusterid}_${VPC}_VPC_attrDnsSupp.json"
+    local VPC_FILE="${WRKDIR}${clusterid}_${VPC}_VPC.json"
+    local VPC_FILE_DNS_HOST="${WRKDIR}${clusterid}_${VPC}_VPC_attrDnsHost.json"
+    local VPC_FILE_DNS_SUPP="${WRKDIR}${clusterid}_${VPC}_VPC_attrDnsSupp.json"
 
     if [ -f ${VPC_FILE} ]; then
       echo "Using existing VPC file ${VPC_FILE}"
@@ -236,8 +237,8 @@ populate_vpc_info_files() {
       echo "Fetching AWS info for ${VPC}..."
       echo "aws ec2 describe-vpcs --vpc-ids ${VPC} > ${VPC_FILE}"
       VPCINFO=$(aws ec2 describe-vpcs --vpc-ids ${VPC})
-      if [ $? -ne 0 ]; then
-        echo "Error fetch VPC:${VPC} from AWS, skipping VPC attribute requests..."
+      if [[ $? -ne 0 || -z $VPCINFO ]]; then
+        PERR "Error fetch VPC:${VPC} from AWS, skipping VPC attribute requests..."
         continue
       fi
       echo "${VPCINFO}" > ${VPC_FILE}
@@ -247,24 +248,39 @@ populate_vpc_info_files() {
       echo "Using existing VPC dns hostname attributes file ${VPC_FILE_DNS_HOST}"
     else
       echo "aws ec2 describe-vpc-attribute --vpc-id ${VPC} --attribute enableDnsHostnames > ${VPC_FILE_DNS_HOST}"
-      aws ec2 describe-vpc-attribute --vpc-id ${VPC} --attribute enableDnsHostnames > ${VPC_FILE_DNS_HOST}
+      OUT=$(aws ec2 describe-vpc-attribute --vpc-id ${VPC} --attribute enableDnsHostnames)
+      if [[ $? -eq 0  && -n $OUT ]]; then
+        echo $OUT > ${VPC_FILE_DNS_HOST}
+      else
+        PERR "Failed to fetch vpc atribute enableDnsHostnames from AWS"
+      fi
     fi
 
     if [ -f ${VPC_FILE_DNS_SUPP} ]; then
       echo "Using existing VPC dns support attributes file ${VPC_FILE_DNS_SUPP}"
     else
       echo "aws ec2 describe-vpc-attribute --vpc-id ${VPC} --attribute enableDnsSupport > ${VPC_FILE_DNS_SUPP}"
-      aws ec2 describe-vpc-attribute --vpc-id ${VPC} --attribute enableDnsSupport > ${VPC_FILE_DNS_SUPP}
+      OUT=$(aws ec2 describe-vpc-attribute --vpc-id ${VPC} --attribute enableDnsSupport)
+      if [[ $? -eq 0  && -n $OUT ]]; then
+        echo $OUT > ${VPC_FILE_DNS_SUPP}
+      else
+        PERR "Failed to fetch vpc atribute enableDnsSupport from AWS"
+      fi
     fi
 
     dhcp_id=$(jq -r '.Vpcs[].DhcpOptionsId' ${VPC_FILE})
-    local DHCP_OPT_FILE="${clusterid}_${dhcp_id}_DHCP_OPT.json"
+    local DHCP_OPT_FILE="${WRKDIR}${clusterid}_${dhcp_id}_DHCP_OPT.json"
     if [ -f ${DHCP_OPT_FILE} ]; then
       echo "Found existing local dhcp options file: ${DHCP_OPT_FILE}"
     else
       echo "Attempting to fetch aws dhcp option info for: ${dhcp_id}..."
       echo "aws ec2 describe-dhcp-options --dhcp-options-ids $dhcp_id > ${DHCP_OPT_FILE}"
-      aws ec2 describe-dhcp-options --dhcp-options-ids $dhcp_id > ${DHCP_OPT_FILE}
+      OUT=$(aws ec2 describe-dhcp-options --dhcp-options-ids $dhcp_id)
+      if [[ $? -eq 0  && -n $OUT ]]; then
+        echo $OUT > ${DHCP_OPT_FILE}
+      else
+        PERR "Failed to fetch dhcp option ${$dhcp_id} from AWS"
+      fi
     fi
   done
 }
@@ -332,10 +348,10 @@ for iid in sorted(instance_roles.keys()):
 print(f'\nTotal: {len(instance_roles)} instances found in cluster resources/install logs')
 PYEOF
 
+  ##########
   printline
   # Grab the list of instance IDS for easy parsing needs later...
-  INSTANCE_IDS=$(
-    python3 << 'PYEOF2'
+  INSTANCE_IDS=$(python3 << 'PYEOF2'
 import json, re, os
 
 if '_CLUSTER_RESOURCES_FILE' in os.environ:
@@ -365,14 +381,13 @@ for match in re.finditer(r'i-[0-9a-f]{17}', all_text):
 # Output space-separated list
 print(' '.join(sorted(instance_ids)))
 PYEOF2
-    2> /dev/null
-  )
+2> /dev/null)
 
   echo "Found the following instance IDS in the cluster install logs: \"${INSTANCE_IDS}\" \n\n"
-  printline
 
-  LB_ARNS=$(
-    python3 << 'PYEOF3'
+  ##########
+  printline
+  LB_ARNS=$(python3 << 'PYEOF3'
 import json
 import re, os
 
@@ -404,13 +419,13 @@ for lb_id in sorted(lb_info.keys()):
     arn = f"arn:aws:elasticloadbalancing:us-east-1:340148571693:loadbalancer/{lb_type}/{lb_name}/{lb_id}"
     print(arn)
 PYEOF3
-  )
+)
   echo "Found the following load balancer ARNS in cluster install logs:\n${LB_ARNS}"
   printline
 
   for ARN in ${LB_ARNS}; do
     LB="${ARN##*/}"
-    LB_FILE="${clusterid}_LB_${LB}.json"
+    LB_FILE="${WRKDIR}${clusterid}_LB_${LB}.json"
     echo "Checking ARN: ${ARN}"
     if [ -f ${LB_FILE} ]; then
       echo "Using existing load balancer file: ${LB_FILE}"
@@ -418,10 +433,11 @@ PYEOF3
       echo "Fetching AWS info for load balancer: ${ARN}"
       echo "aws elbv2 describe-load-balancers --load-balancer-arns ${ARN}"
       LBJ=$(aws elbv2 describe-load-balancers --load-balancer-arns ${ARN} 2> /dev/null)
-      if [ -n "$LBJ" ]; then
+      if [[ $? -eq 0 && -n "$LBJ" ]]; then
         echo "Writing load balancer info to file: ${LB_FILE}"
+        echo ${LBJ} > ${LB_FILE}
       else
-        echo "Failed to fetch load balancer: ${ARN}"
+        PERR "Failed to fetch load balancer: ${ARN}"
       fi
     fi
     printline
@@ -448,8 +464,8 @@ fi #end of code block 'if [ -f ${CLUSTER_RESOURCES}]...'
 
 # Attempt to gather VPC endpoint info from AWS based on our tags.
 if [ ${PRIVATE_LINK} ]; then
-  VPC_EPSRV_FILE=${cluster_id}_vpc_endpoint_service.json
-  VPC_EP_CONN_FILE=${cluster_id}_vpc_endpoint_service_conns.json
+  VPC_EPSRV_FILE=${WRKDIR}${cluster_id}_vpc_endpoint_service.json
+  VPC_EP_CONN_FILE=${WRKDIR}${cluster_id}_vpc_endpoint_service_conns.json
 
   if [ -f ${VPC_EPSRV_FILE} ]; then
     echo "Using existing vpc endpoint service file: ${VPC_EPSRV_FILE}"
@@ -457,8 +473,8 @@ if [ ${PRIVATE_LINK} ]; then
     echo "Fetching vpc endpoint service info from AWS..."
     echo "aws ec2 describe-vpc-endpoint-service-configurations --filters \"Name=tag:Name,Values=${INFRA_ID}-vpc-endpoint-service\""
     VPCSRVOUT=$(aws ec2 describe-vpc-endpoint-service-configurations --filters "Name=tag:Name,Values=${INFRA_ID}-vpc-endpoint-service")
-    if [ $? -ne 0 ]; then
-      echo "Failed to fetch vpc service configuration from AWS"
+    if [[ $? -ne 0 || -z "$VPCSRVOUT" ]]; then
+      PERR "Failed to fetch vpc service configuration from AWS"
     else
       echo "${VPCSRVOUT}" > ${VPC_EPSRV_FILE}
     fi
@@ -474,8 +490,8 @@ if [ ${PRIVATE_LINK} ]; then
       echo "Fetching vpc endpoint connections for serviceId: '${SERVICE_ID}'"
       echo "aws ec2 describe-vpc-endpoint-connections --filters \"Name=service-id,Values=${SERVICE_ID}\""
       CONNOUT=$(aws ec2 describe-vpc-endpoint-connections --filters "Name=service-id,Values=${SERVICE_ID}")
-      if [ $? -ne 0 ]; then
-        echo "Failed to fetch vpc endpoint connections for: ${SERVICE_ID}"
+      if [[ $? -ne 0 || -z "${CONNOUT}" ]]; then
+        PERR "Failed to fetch vpc endpoint connections for: ${SERVICE_ID}"
       else
         echo ${CONNOUT} > ${VPC_EP_CONN_FILE}
       fi
@@ -497,9 +513,15 @@ printline
 if [ -f ${CLUSTER_EC2_INSTANCES} ]; then
   echo "using existing ec2 instances file: ${CLUSTER_EC2_INSTANCES}"
 else
+  # Dont filter these yet, previous checks included those for bad tags...
   echo "Fetching ec2 instances from AWS..."
-  echo "aws ec2 describe-instances --query "Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}" --output json > ${CLUSTER_EC2_INSTANCES}"
-  aws ec2 describe-instances --query "Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}" --output json > ${CLUSTER_EC2_INSTANCES}
+  echo "aws ec2 describe-instances --query \"Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}\" --output json"
+  OUT=$(aws ec2 describe-instances --query "Reservations[*].Instances[*].{InstanceId:InstanceId,State:State.Name,LaunchTime:LaunchTime,Tags:Tags}" --output json)
+  if [[ $? -eq 0 && -n "${OUT}" ]]; then
+    echo ${OUT} > ${CLUSTER_EC2_INSTANCES}
+  else 
+    PERR "Failed to fetch EC2 Instances"
+  fi
   printline
 fi
 
@@ -525,14 +547,19 @@ printline
 # iterate over all the instance IDs found existing in AWS and grab their console logs...
 echo "Getting console output for instances found in AWS..."
 jq --arg tag_str "f1l4r4k5d2p3a1l" -r '.[] | unique_by(.InstanceId)[]| select(.Tags[]? | .Value | contains($tag_str)) |.InstanceId' ${CLUSTER_EC2_INSTANCES} | while read vm; do
-  CONSOLE_FILE=${clusterid}_${vm}_console.log
+  CONSOLE_FILE=${WRKDIR}${clusterid}_${vm}_console.log
   echo "VM: ${vm}"
   if [ -f ${CONSOLE_FILE} ]; then
     echo "Using existing vm ${vm} console file: ${CONSOLE_FILE}"
   else
     echo "Getting console output for instance ${vm}"
     echo "aws ec2 get-console-output --instance-id ${vm} --output text --query 'Output' > ${CONSOLE_FILE}"
-    aws ec2 get-console-output --instance-id ${vm} --output text --query 'Output' > ${CONSOLE_FILE}
+    OUT=$(aws ec2 get-console-output --instance-id ${vm} --output text --query 'Output')
+    if [[ $? -eq 0 && -n "${OUT}" ]]; then
+      echo $OUT > ${CONSOLE_FILE}
+    else 
+      PERR "FAiled to fetch ec2 console output for instance: ${vm}"
+    fi
   fi
 done
 
@@ -542,7 +569,7 @@ printline
 echo "\nFetching cluster create time to use for cloudtrail logs..."
 echo "CREATE_TIME=\$(jq -r '.creation_timestamp' ${CLUSTER_JSON})"
 CREATE_TIME=$(jq -r '.creation_timestamp' ${CLUSTER_JSON})
-CLUSTER_CT_LOGS="${clusterid}_cloudtrail.json"
+CLUSTER_CT_LOGS="${WRKDIR}${clusterid}_cloudtrail.json"
 CAPTURE_WINDOW="2 hours"
 CAPTURE_START=${CREATE_TIME}
 CAPTURE_END=$(gdate -u -d "${CREATE_TIME} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
@@ -559,9 +586,8 @@ else
   if [[ $? -eq 0 && -n "$CTOUT" ]]; then 
     echo ${CTOUT} > ${CLUSTER_CT_LOGS}
   else
-    echo "Failed fetch cloudtrail info from AWS"
+    PERR "Failed fetch cloudtrail info from AWS"
   fi
-  > ${CLUSTER_CT_LOGS}
 fi
 printline
 
@@ -569,9 +595,9 @@ printline
 echo "\nGetting route53 info..."
 BASE_DOMAIN=$(jq -r '.dns.base_domain' ${CLUSTER_JSON})
 CLUSTER_DOMAIN="${DOMAIN_PREFIX}.${BASE_DOMAIN}"
-API_RECORD_SETS=${clusterid}_route53_api_record_sets.json
-APPS_RECORD_SETS=${clusterid}_route53_apps_record_sets.json
-HOSTED_ZONES=${clusterid}_hosted_zones.json
+API_RECORD_SETS=${WRKDIR}${clusterid}_route53_api_record_sets.json
+APPS_RECORD_SETS=${WRKDIR}${clusterid}_route53_apps_record_sets.json
+HOSTED_ZONES=${WRKDIR}${clusterid}_hosted_zones.json
 
 echo "CLUSTER_DOMAIN=\"${DOMAIN_PREFIX}.${BASE_DOMAIN}\""
 
@@ -582,13 +608,20 @@ if [ -f ${HOSTED_ZONES} ]; then
 else
   echo "fetching hosted zone for cluster domain ${CLUSTER_DOMAIN}..."
   echo "aws route53 list-hosted-zones --query \"HostedZones[?Name=='${CLUSTER_DOMAIN}.'].Id\" --output json > ${HOSTED_ZONES}"
-  aws route53 list-hosted-zones --query "HostedZones[?Name=='${CLUSTER_DOMAIN}.'].Id" --output json > ${HOSTED_ZONES}
+  OUT=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='${CLUSTER_DOMAIN}.'].Id" --output json)
+  if [[ $? -eq 0 && -n "${OUT}" ]]; then
+      echo $OUT > ${HOSTED_ZONES}
+  else 
+      PERR "Failed to fetch hosted zones for domain ${CLUSTER_DOMAIN}"
+  fi
+   
 fi
-
-echo "\nGetting hosted ZONE_ID from ${HOSTED_ZONES}..."
-echo "ZONE_ID=\$( jq -r '.[0] | split("/")[2]' ${HOSTED_ZONES})"
-ZONE_ID=$(jq -r '.[0] | split("/")[2]' ${HOSTED_ZONES})
-
+ZONE_ID=""
+if [ -f ${HOSTED_ZONES} ]; then
+  echo "\nGetting hosted ZONE_ID from ${HOSTED_ZONES}..."
+  echo "ZONE_ID=\$( jq -r '.[0] | split("/")[2]' ${HOSTED_ZONES})"
+  ZONE_ID=$(jq -r '.[0] | split("/")[2]' ${HOSTED_ZONES})
+fi 
 if [ -n "$ZONE_ID" ]; then
   if [ -f ${API_RECORD_SETS} ]; then
     echo "using existing file ${API_RECORD_SETS}"
@@ -599,7 +632,7 @@ if [ -n "$ZONE_ID" ]; then
     if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
       echo ${RSOUT} > ${API_RECORD_SETS}
     else
-      echo "Failed to get API record sets"
+      PERR "Failed to get API record sets"
     fi
   fi
 
@@ -612,7 +645,7 @@ if [ -n "$ZONE_ID" ]; then
     if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
       echo ${RSOUT} > ${APPS_RECORD_SETS}
     else
-      echo "Failed to get APP record sets"
+      PERR "Failed to get APP record sets"
     fi
   fi
 
@@ -628,7 +661,7 @@ if [ -f ${CLUSTER_RESOURCES} ]; then
 fi
 
 # Fetch the security groups from AWS...
-SG_FILE=${clusterid}_security_groups.json
+SG_FILE=${WRKDIR}${clusterid}_security_groups.json
 
 if [ -f ${SG_FILE} ]; then
   echo "Using existing security group file: ${SG_FILE}"
@@ -639,24 +672,29 @@ else
   if [[ $? -eq 0 && -n "$SGOUT" ]]; then 
     echo ${SGOUT} > ${SG_FILE}
   else
-    echo "Failed fetch securtiy group info from AWS"
+    PERR "Erring fetching securtiy group info from AWS"
   fi
 fi
 printline
 
 # Get all load balancers
-LB_ALL_FILE=${clusterid}_LB_ALL.json
+LB_ALL_FILE=${WRKDIR}${clusterid}_LB_ALL.json
 if [ -f ${LB_ALL_FILE} ]; then
   echo "Using existing all load balancers json file ${LB_ALL_FILE} ..."
 else
   echo "Fetching all load balancers from AWS..."
-  echo "aws elbv2 describe-load-balancers --output json  > ${LB_ALL_FILE}"
-  aws elbv2 describe-load-balancers --output json > ${LB_ALL_FILE}
+  echo "aws elbv2 describe-load-balancers --output json"
+  OUT=$(aws elbv2 describe-load-balancers --output json) 
+  if [[ $? -eq 0 && -n "$OUT" ]]; then 
+    echo ${OUT} > ${LB_ALL_FILE}
+  else
+    PERR "Failed to fetch load balancers from AWS"
+  fi
 fi
 
 jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE} | while read -r arn; do
   lb="${arn##*/}"
-  LB_FILE="${clusterid}_LB_${lb}.json"
+  LB_FILE="${WRKDIR}${clusterid}_LB_${lb}.json"
   if [ -f ${LB_FILE} ]; then
     echo "using existing load balancer file: ${LB_FILE}"
   else
@@ -668,6 +706,8 @@ jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE} | while read -r arn; do
       echo "Found LOAD balancer with matching infra_id(${INFRA_ID}): '$arn'"
       echo "Writing LB json to file '${LB_FILE}'"
       echo "${lbjson}" > ${LB_FILE}
+    else
+      PERR "Failed to find LB matching tag with infra:${INFRA_ID}"
     fi
   fi
 done
