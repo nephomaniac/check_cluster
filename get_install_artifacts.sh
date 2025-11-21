@@ -167,6 +167,109 @@ parse_elapsed_time() {
   fi
 }
 
+# Helper function to fetch CloudWatch metrics with intelligent file caching
+# Arguments:
+#   $1 - instance_id
+#   $2 - metric_name (used in filename)
+#   $3 - aws_metric_name (CloudWatch metric name)
+#   $4 - namespace (e.g., AWS/EC2, CWAgent)
+#   $5 - statistic (e.g., Average, Sum)
+#   $6 - description (for error messages)
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+fetch_cloudwatch_metric() {
+  local instance_id="$1"
+  local metric_name="$2"
+  local aws_metric_name="$3"
+  local namespace="$4"
+  local statistic="$5"
+  local description="$6"
+  local metric_period="${PERIOD:-300}"
+
+  # Look for existing files matching the prefix
+  local file_prefix="${WRKDIR}${clusterid}_${instance_id}_${metric_name}_"
+  local existing_file=$(ls ${file_prefix}*.json 2>/dev/null | head -n 1)
+
+  local fetch_start="${CAPTURE_START}"
+  local fetch_end="${CAPTURE_END}"
+  local final_output_file="${file_prefix}${CAPTURE_START}_${CAPTURE_END}.json"
+
+  if [ -n "$existing_file" ]; then
+    # Extract timestamps from existing filename
+    local filename=$(basename "$existing_file")
+    # Pattern: clusterid_instanceid_metricname_START_END.json
+    if [[ "$filename" =~ _([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)_([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\.json$ ]]; then
+      local file_start="${BASH_REMATCH[1]}"
+      local file_end="${BASH_REMATCH[2]}"
+
+      # Check if requested range is completely within existing file's range
+      if [[ "$CAPTURE_START" > "$file_start" || "$CAPTURE_START" == "$file_start" ]] && [[ "$CAPTURE_END" < "$file_end" || "$CAPTURE_END" == "$file_end" ]]; then
+        echo "Using existing ${description} metrics file (covers requested time range): ${existing_file}"
+        return 0
+      fi
+
+      # Determine the merged time range
+      local new_start="$CAPTURE_START"
+      local new_end="$CAPTURE_END"
+      [[ "$file_start" < "$new_start" ]] && new_start="$file_start"
+      [[ "$file_end" > "$new_end" ]] && new_end="$file_end"
+
+      final_output_file="${file_prefix}${new_start}_${new_end}.json"
+
+      # If we need to expand the range, fetch new data
+      if [[ "$CAPTURE_START" < "$file_start" || "$CAPTURE_END" > "$file_end" ]]; then
+        echo "Fetching additional ${description} metrics to expand time range..."
+        echo "  Existing: ${file_start} to ${file_end}"
+        echo "  Requested: ${CAPTURE_START} to ${CAPTURE_END}"
+        echo "  New range: ${new_start} to ${new_end}"
+
+        # Fetch the full new range
+        fetch_start="$new_start"
+        fetch_end="$new_end"
+      fi
+    fi
+  fi
+
+  # Fetch metrics from AWS
+  echo "aws cloudwatch get-metric-statistics --namespace ${namespace} --metric-name ${aws_metric_name} --dimensions Name=InstanceId,Value=${instance_id} --start-time ${fetch_start} --end-time ${fetch_end} --period ${metric_period} --statistics ${statistic} --output json"
+
+  local metrics_output
+  metrics_output=$(aws cloudwatch get-metric-statistics \
+    --namespace ${namespace} \
+    --metric-name ${aws_metric_name} \
+    --dimensions Name=InstanceId,Value=${instance_id} \
+    --start-time ${fetch_start} \
+    --end-time ${fetch_end} \
+    --period ${metric_period} \
+    --statistics ${statistic} \
+    --output json)
+
+  if [ $? -ne 0 ]; then
+    PERR "Failed to fetch ${description} for ${instance_id}"
+    return 1
+  fi
+
+  # If we have an existing file and fetched new data, merge the datapoints
+  if [ -n "$existing_file" ] && [ "$existing_file" != "$final_output_file" ]; then
+    echo "Merging new data with existing data..."
+    local merged_data
+    merged_data=$(jq -s '.[0] as $old | .[1] as $new | $old + {Datapoints: (($old.Datapoints // []) + ($new.Datapoints // []) | unique_by(.Timestamp) | sort_by(.Timestamp))}' "$existing_file" <(echo "$metrics_output"))
+
+    echo "$merged_data" > "$final_output_file"
+
+    # Remove old file if it's different from new file
+    if [ "$existing_file" != "$final_output_file" ]; then
+      rm -f "$existing_file"
+      echo "Removed old file: ${existing_file}"
+      echo "Created new file: ${final_output_file}"
+    fi
+  else
+    # No existing file or same filename, just write the data
+    echo "${metrics_output}" > "${final_output_file}"
+  fi
+
+  return 0
+}
+
 
 
 # Fetch CloudWatch CPU percent metrics for an EC2 instance
@@ -175,34 +278,7 @@ parse_elapsed_time() {
 # Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
 # Returns CPU utilization as a percentage (0-100)
 fetch_instance_cpu_percent_metrics() {
-  local instance_id="$1"
-  local metric_period="${PERIOD:-300}"
-  local output_file="${WRKDIR}${clusterid}_${instance_id}_cpu_percent_${CAPTURE_START}_${CAPTURE_END}.json"
-
-  if [ -f "${output_file}" ]; then
-    echo "Using existing CPU percent metrics file: ${output_file}"
-    return 0
-  fi
-
-  echo "aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
-
-  local metrics_output
-  metrics_output=$(aws cloudwatch get-metric-statistics \
-    --namespace AWS/EC2 \
-    --metric-name CPUUtilization \
-    --dimensions Name=InstanceId,Value=${instance_id} \
-    --start-time ${CAPTURE_START} \
-    --end-time ${CAPTURE_END} \
-    --period ${metric_period} \
-    --statistics Average \
-    --output json)
-
-  if [ $? -eq 0 ]; then
-    echo "${metrics_output}" > "${output_file}"
-  else
-    PERR "Failed to fetch CPU percent info for ${instance_id}"
-    return 1
-  fi
+  fetch_cloudwatch_metric "$1" "CPUUtilization" "CPUUtilization" "AWS/EC2" "Average" "CPU percent"
 }
 
 # Fetch CloudWatch memory percent metrics for an EC2 instance
@@ -211,34 +287,7 @@ fetch_instance_cpu_percent_metrics() {
 # Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
 # Note: Requires CloudWatch agent to be installed on the instance
 fetch_instance_mem_percent_metrics() {
-  local instance_id="$1"
-  local metric_period="${PERIOD:-300}"
-  local output_file="${WRKDIR}${clusterid}_${instance_id}_mem_${CAPTURE_START}_${CAPTURE_END}.json"
-
-  if [ -f "${output_file}" ]; then
-    echo "Using existing memory metrics file: ${output_file}"
-    return 0
-  fi
-
-  echo "aws cloudwatch get-metric-statistics --namespace CWAgent --metric-name mem_used_percent --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
-
-  local metrics_output
-  metrics_output=$(aws cloudwatch get-metric-statistics \
-    --namespace CWAgent \
-    --metric-name mem_used_percent \
-    --dimensions Name=InstanceId,Value=${instance_id} \
-    --start-time ${CAPTURE_START} \
-    --end-time ${CAPTURE_END} \
-    --period ${metric_period} \
-    --statistics Average \
-    --output json)
-
-  if [ $? -eq 0 ]; then
-    echo "${metrics_output}" > "${output_file}"
-  else
-    PERR "Failed to fetch memory info for ${instance_id}"
-    return 1
-  fi
+  fetch_cloudwatch_metric "$1" "mem_used_percent" "mem_used_percent" "CWAgent" "Average" "memory percent"
 }
 
 # Fetch CloudWatch EBS IOPS exceeded check metrics for an EC2 instance
@@ -247,34 +296,7 @@ fetch_instance_mem_percent_metrics() {
 # Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
 # Returns 1 if instance has exceeded EBS IOPS limit, 0 otherwise
 fetch_instance_ebs_iops_exceeded() {
-  local instance_id="$1"
-  local metric_period="${PERIOD:-300}"
-  local output_file="${WRKDIR}${clusterid}_${instance_id}_ebs_iops_exceeded_${CAPTURE_START}_${CAPTURE_END}.json"
-
-  if [ -f "${output_file}" ]; then
-    echo "Using existing EBS IOPS exceeded metrics file: ${output_file}"
-    return 0
-  fi
-
-  echo "aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name InstanceEBSIOPSExceededCheck --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
-
-  local metrics_output
-  metrics_output=$(aws cloudwatch get-metric-statistics \
-    --namespace AWS/EC2 \
-    --metric-name InstanceEBSIOPSExceededCheck \
-    --dimensions Name=InstanceId,Value=${instance_id} \
-    --start-time ${CAPTURE_START} \
-    --end-time ${CAPTURE_END} \
-    --period ${metric_period} \
-    --statistics Average \
-    --output json)
-
-  if [ $? -eq 0 ]; then
-    echo "${metrics_output}" > "${output_file}"
-  else
-    PERR "Failed to fetch EBS IOPS exceeded info for ${instance_id}"
-    return 1
-  fi
+  fetch_cloudwatch_metric "$1" "InstanceEBSIOPSExceededCheck" "InstanceEBSIOPSExceededCheck" "AWS/EC2" "Average" "EBS IOPS exceeded"
 }
 
 # Fetch CloudWatch EBS throughput exceeded check metrics for an EC2 instance
@@ -283,34 +305,34 @@ fetch_instance_ebs_iops_exceeded() {
 # Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
 # Returns 1 if instance has exceeded EBS throughput limit, 0 otherwise
 fetch_instance_ebs_througput_exceeded() {
-  local instance_id="$1"
-  local metric_period="${PERIOD:-300}"
-  local output_file="${WRKDIR}${clusterid}_${instance_id}_ebs_throughput_exceeded_${CAPTURE_START}_${CAPTURE_END}.json"
+  fetch_cloudwatch_metric "$1" "InstanceEBSThroughputExceededCheck" "InstanceEBSThroughputExceededCheck" "AWS/EC2" "Average" "EBS throughput exceeded"
+}
 
-  if [ -f "${output_file}" ]; then
-    echo "Using existing EBS throughput exceeded metrics file: ${output_file}"
-    return 0
-  fi
+# Fetch CloudWatch ENI bandwidth in allowance exceeded metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Returns sum of times bandwidth in allowance was exceeded
+fetch_instance_eni_bw_in_allowance_exceeded() {
+  fetch_cloudwatch_metric "$1" "bw_in_allowance_exceeded" "bw_in_allowance_exceeded" "AWS/EC2" "Sum" "ENI bandwidth in allowance exceeded"
+}
 
-  echo "aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name InstanceEBSThroughputExceededCheck --dimensions Name=InstanceId,Value=${instance_id} --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --period ${metric_period} --statistics Average --output json"
+# Fetch CloudWatch ENI bandwidth out allowance exceeded metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Returns sum of times bandwidth out allowance was exceeded
+fetch_instance_eni_bw_out_allowance_exceeded() {
+  fetch_cloudwatch_metric "$1" "bw_out_allowance_exceeded" "bw_out_allowance_exceeded" "AWS/EC2" "Sum" "ENI bandwidth out allowance exceeded"
+}
 
-  local metrics_output
-  metrics_output=$(aws cloudwatch get-metric-statistics \
-    --namespace AWS/EC2 \
-    --metric-name InstanceEBSThroughputExceededCheck \
-    --dimensions Name=InstanceId,Value=${instance_id} \
-    --start-time ${CAPTURE_START} \
-    --end-time ${CAPTURE_END} \
-    --period ${metric_period} \
-    --statistics Average \
-    --output json)
-
-  if [ $? -eq 0 ]; then
-    echo "${metrics_output}" > "${output_file}"
-  else
-    PERR "Failed to fetch EBS throughput exceeded info for ${instance_id}"
-    return 1
-  fi
+# Fetch CloudWatch ENI packets per second allowance exceeded metrics for an EC2 instance
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: CAPTURE_START, CAPTURE_END, PERIOD, clusterid, WRKDIR
+# Returns sum of times PPS allowance was exceeded
+fetch_instance_eni_pps_allowance_exceeded() {
+  fetch_cloudwatch_metric "$1" "pps_allowance_exceeded" "pps_allowance_exceeded" "AWS/EC2" "Sum" "ENI PPS allowance exceeded"
 }
 
 # Fetch EC2 instance console logs
@@ -556,6 +578,9 @@ get_ec2_instance_info() {
       fetch_instance_mem_percent_metrics "${vm}"
       fetch_instance_ebs_iops_exceeded "${vm}"
       fetch_instance_ebs_througput_exceeded "${vm}"
+      fetch_instance_eni_bw_in_allowance_exceeded "${vm}"
+      fetch_instance_eni_bw_out_allowance_exceeded "${vm}"
+      fetch_instance_eni_pps_allowance_exceeded "${vm}"
     done
   else
     PERR "No ec2 instances file found: '${CLUSTER_EC2_INSTANCES}'"
