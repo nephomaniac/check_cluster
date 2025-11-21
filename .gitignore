@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Cluster health check reports (contain sensitive cluster data)
+results_*.md
+
+# Claude update documentation (may contain sensitive cluster IDs/data)
+claude_updates/

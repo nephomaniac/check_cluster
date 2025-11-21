@@ -56,7 +56,7 @@ Automated data collection script that gathers comprehensive AWS infrastructure a
 ./get_install_artifacts.sh --help
 
 # Collect data for a cluster
-./get_install_artifacts.sh -c 2ml4ao38fdomfv0iqrsca3abmttnlclm
+./get_install_artifacts.sh -c <clusterid>
 ```
 
 ### Options
@@ -81,10 +81,10 @@ All files created in current directory with naming pattern:
 
 Examples:
 ```
-2ml4ao38fdomfv0iqrsca3abmttnlclm_cluster.json
-2ml4ao38fdomfv0iqrsca3abmttnlclm_vpc-0c103a233aa875f9b_VPC.json
-2ml4ao38fdomfv0iqrsca3abmttnlclm_ec2_instances.json
-2ml4ao38fdomfv0iqrsca3abmttnlclm_cloudtrail.json
+<clusterid>_cluster.json
+<clusterid>_vpc-0c103a233aa875f9b_VPC.json
+<clusterid>_ec2_instances.json
+<clusterid>_cloudtrail.json
 ```
 
 ### Features

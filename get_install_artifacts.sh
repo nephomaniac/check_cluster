@@ -34,7 +34,7 @@ show_help() {
 ROSA Cluster Data Collection Tool
 
 SYNOPSIS:
-  $(basename "$0") -c|--cluster <cluster-id>
+  $(basename "$0") -c|--cluster <cluster-id> [-d|--dir <directory>]
   $(basename "$0") -h|--help
 
 DESCRIPTION:
@@ -55,6 +55,7 @@ DESCRIPTION:
 
 OPTIONS:
   -c, --cluster <cluster-id>    ROSA cluster ID to collect data for
+  -d, --dir <directory>         Directory for reading/writing files (default: current directory)
   -h, --help                    Display this help message and exit
 
 PREREQUISITES:
@@ -65,23 +66,25 @@ PREREQUISITES:
   • Required tools: jq, python3, gdate (macOS: brew install coreutils)
 
 EXAMPLES:
-  # Refresh AWS credentials and collect data
-  eval \$(ocm backplane cloud credentials 2ml4ao38fdomfv0iqrsca3abmttnlclm -o env)
-  $(basename "$0") -c 2ml4ao38fdomfv0iqrsca3abmttnlclm
+  # Refresh AWS credentials and collect data in current directory
+  eval \$(ocm backplane cloud credentials <clusterid> -o env)
+  $(basename "$0") -c <clusterid>
 
-  # Show this help message
-  $(basename "$0") --help
+  # Collect data in a specific directory
+  eval \$(ocm backplane cloud credentials <clusterid> -o env)
+  $(basename "$0") -c <clusterid> -d /path/to/cluster/data
 
 OUTPUT FILES:
-  All files are created in the current directory with naming pattern:
+  All files are created in the specified directory (or current directory if -d
+  not provided) with naming pattern:
     {cluster_id}_{resource_type}.json
     {cluster_id}_{resource_id}_{resource_type}.json
 
   Examples:
-    2ml4ao38fdomfv0iqrsca3abmttnlclm_cluster.json
-    2ml4ao38fdomfv0iqrsca3abmttnlclm_vpc-xxx_VPC.json
-    2ml4ao38fdomfv0iqrsca3abmttnlclm_ec2_instances.json
-    2ml4ao38fdomfv0iqrsca3abmttnlclm_cloudtrail.json
+    <clusterid>_cluster.json
+    <clusterid>_vpc-xxx_VPC.json
+    <clusterid>_ec2_instances.json
+    <clusterid>_cloudtrail.json
 
 NOTES:
   • Script is idempotent - safe to run multiple times
@@ -93,11 +96,16 @@ EOF
 
 # Parse command-line arguments
 clusterid=""
+directory="."
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     -c|--cluster)
       clusterid="$2"
+      shift 2
+      ;;
+    -d|--dir)
+      directory="$2"
       shift 2
       ;;
     -h|--help)
@@ -121,7 +129,24 @@ if [ -z "${clusterid}" ]; then
   exit 1
 fi
 
+# Handle directory - create if needed and change to it
+if [ ! -d "${directory}" ]; then
+  echo "Creating directory: ${directory}"
+  mkdir -p "${directory}"
+  if [ $? -ne 0 ]; then
+    echo "Error: Failed to create directory: ${directory}" >&2
+    exit 1
+  fi
+fi
+
+echo "Changing to directory: ${directory}"
+cd "${directory}" || {
+  echo "Error: Failed to change to directory: ${directory}" >&2
+  exit 1
+}
+
 echo "Starting data collection for cluster: ${clusterid}"
+echo "Working directory: $(pwd)"
 echo "This may require refreshing local AWS creds, example..."
 echo "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
 echo ""
@@ -166,12 +191,27 @@ if [ -f ${CLUSTER_RESOURCES} ]; then
   echo "Using existing ${CLUSTER_RESOURCES} file"
 else
   echo "Fetching ocm cluster resources for install logs..."
-  echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources > ${CLUSTER_RESOURCES}"
-  ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources > ${CLUSTER_RESOURCES}
+  echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources"
+  RESOUT=$(ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources)
   if [ $? -ne 0 ]; then
     echo "Failed to get cluster resources?"
     echo "ocm get /api/clusters_mgmt/v1/clusters/${clusterid}/resources > ${CLUSTER_RESOURCES}"
     exit 1
+  fi
+  # Check if cluster resources, install logs are empty. This is expected for a ready cluster. 
+  RES=$(echo ${RESOUT} | jq -r 'if .resources == null then "empty" else "notNull" end' 2> /dev/null)
+  if [ "empty" == "${RES}" ]; then 
+    echo "Cluster resources not found for this cluster" 
+    CSTATE=$(jq -r '.state' ${CLUSTER_JSON})
+    echo "Cluster state:${CSTATE}"
+    if [ "${CSTATE}" == "ready" ]; then
+      echo "Cluster resources are not expected for clusters in ready state"
+    else 
+      echo "Cluster is in ${CSTATE} state, new clusters in non-ready state may need to wait for this to be populated"
+      echo "Can run this command again later to retry, will attempt to gather info from AWS without this for now"
+    fi
+  else  
+    echo ${RESOUT} > ${CLUSTER_RESOURCES}
   fi
 fi
 
@@ -515,7 +555,13 @@ else
   echo "Gathering cloudtrail logs for '${CAPTURE_WINDOW}' from '${CAPTURE_START}' to '${CAPTURE_END}' ..."
   echo "aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END}  --output json | jq -c '.[]' > ${CLUSTER_CT_LOGS}"
 
-  aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --output json | jq -c '.[]' > ${CLUSTER_CT_LOGS}
+  CTOUT=$(aws cloudtrail lookup-events --lookup-attributes AttributeKey=ReadOnly,AttributeValue=false --start-time ${CAPTURE_START} --end-time ${CAPTURE_END} --output json | jq -c '.[]') 
+  if [[ $? -eq 0 && -n "$CTOUT" ]]; then 
+    echo ${CTOUT} > ${CLUSTER_CT_LOGS}
+  else
+    echo "Failed fetch cloudtrail info from AWS"
+  fi
+  > ${CLUSTER_CT_LOGS}
 fi
 printline
 
@@ -549,7 +595,12 @@ if [ -n "$ZONE_ID" ]; then
   else
     echo "Fetching API records sets for hosted zone ${ZONE_ID} ..."
     echo "aws route53 list-resource-record-sets --hosted-zone-id \"$ZONE_ID\" --query \"ResourceRecordSets[?Name=='api.${CLUSTER_DOMAIN}.']\" --output json > ${API_RECORD_SETS}"
-    aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Name=='api.${CLUSTER_DOMAIN}.']" --output json > ${API_RECORD_SETS}
+    RSOUT=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Name=='api.${CLUSTER_DOMAIN}.']" --output json)
+    if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
+      echo ${RSOUT} > ${API_RECORD_SETS}
+    else
+      echo "Failed to get API record sets"
+    fi
   fi
 
   if [ -f ${APPS_RECORD_SETS} ]; then
@@ -557,7 +608,12 @@ if [ -n "$ZONE_ID" ]; then
   else
     echo "Fetching APPS records sets for hosted zone ${ZONE_ID} ..."
     echo "aws route53 list-resource-record-sets --hosted-zone-id \"$ZONE_ID\" --query \"ResourceRecordSets[?Name=='*.apps.${CLUSTER_DOMAIN}.']\" --output json > ${APPS_RECORD_SETS}"
-    aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Name=='*.apps.${CLUSTER_DOMAIN}.']" --output json > ${APPS_RECORD_SETS}
+    RSOUT=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Name=='*.apps.${CLUSTER_DOMAIN}.']" --output json)
+    if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
+      echo ${RSOUT} > ${APPS_RECORD_SETS}
+    else
+      echo "Failed to get APP record sets"
+    fi
   fi
 
 else
@@ -579,7 +635,12 @@ if [ -f ${SG_FILE} ]; then
 else
   echo "Getting security groups with tags matching infra_id:${INFRA_ID} ..."
   echo "aws ec2 describe-security-groups --filters \"Name=tag-value,Values=*${INFRA_ID}*\" --output json > ${SG_FILE}"
-  aws ec2 describe-security-groups --filters "Name=tag-value,Values=*${INFRA_ID}*" --output json > ${SG_FILE}
+  SGOUT=$(aws ec2 describe-security-groups --filters "Name=tag-value,Values=*${INFRA_ID}*" --output json)
+  if [[ $? -eq 0 && -n "$SGOUT" ]]; then 
+    echo ${SGOUT} > ${SG_FILE}
+  else
+    echo "Failed fetch securtiy group info from AWS"
+  fi
 fi
 printline
 
