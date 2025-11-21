@@ -535,6 +535,7 @@ BLUE ${VPC_IDS}
 populate_vpc_info_files "${VPC_IDS}"
 
 printline
+HDR "Getting EC2 instance information"
 # Grab the EC2 Instances from aws...
 if [ -f ${CLUSTER_EC2_INSTANCES} ]; then
   GREEN "using existing ec2 instances file: ${CLUSTER_EC2_INSTANCES}"
@@ -551,7 +552,6 @@ else
   printline
 fi
 
-HDR "Getting EC2 instances from AWS"
 if [ -f ${CLUSTER_EC2_INSTANCES} ]; then 
   # Parse the ec2 output into a table for viewing filter out the instances by our cluster tags.
   # AI can chew on the raw json later...
@@ -708,6 +708,13 @@ else
   fi
 fi
 
+
+echo """
+AWS LBs dont provide tags in the describe LB response, so
+a separate API call 'describe-tags' is need to create a tag <-> resource association. 
+Iterating over LBs found in ${LB_ALL_FILE} to get tag associations...
+jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE}
+"""
 jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE} | while read -r arn; do
   lb="${arn##*/}"
   LB_FILE="${WRKDIR}${clusterid}_LB_${lb}.json"
@@ -728,7 +735,13 @@ jq -r '.LoadBalancers[].LoadBalancerArn' ${LB_ALL_FILE} | while read -r arn; do
     echo "jq -r --arg infra \"${INFRA_ID}\" '.TagDescriptions[].Tags[] | select((.Value | contains(\$infra)) or (.Key | contains(\$infra))) | .Key + "=" + .Value' ${LB_FILE}"
     MATCH=$(jq -r --arg infra "${INFRA_ID}" '.TagDescriptions[].Tags[] | select((.Value | contains($infra)) or (.Key | contains($infra))) | .Key + "=" + .Value' ${LB_FILE})
     if [ -n "$MATCH" ]; then
-      GREEN "Found LOAD balancer with matching infra_id(${INFRA_ID}): '$arn'"
+      LBSVC=$(jq -r '.TagDescriptions[].Tags[] | select(.Key == "kubernetes.io/service-name") | "Kub service-name: " + .Value' ${LB_FILE})
+      LBROLE=$(jq -r '.TagDescriptions[].Tags[] | select(.Key | contains("role")) | "Kub role: " + .Value' ${LB_FILE})
+      printline 
+      GREEN "  Found LB info: ${lb}, with tag(s) matching infra:${INFRA_ID}"
+      GREEN "  LB Kub Service Name: '${LBSVC}'"
+      GREEN "  LB Kub Role: '${LBROLE}'"
+      printline
     else
       PERR "LB ${arn} did not have tags matching infra:${INFRA_ID}"
     fi
