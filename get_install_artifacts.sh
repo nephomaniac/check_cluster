@@ -42,6 +42,11 @@ DESCRIPTION:
   Gathers comprehensive AWS infrastructure and OpenShift cluster installation
   artifacts from OCM and AWS APIs.
 
+  The script automatically reuses the time range from the previous run if:
+    • A last_run.json file exists in the working directory
+    • No -s/--start or -e/--elapsed arguments are provided
+  This makes it easy to refresh data for the same time window.
+
   Collected data includes:
     • OCM cluster metadata and installation logs
     • VPC details and DNS attributes
@@ -57,10 +62,13 @@ OPTIONS:
   -c, --cluster <cluster-id>    ROSA cluster ID to collect data for
   -d, --dir <directory>         Directory for reading/writing files (default: current directory)
   -s, --start <date>            CloudTrail start date in format: YYYY-MM-DDTHH:MM:SSZ
-                                (default: cluster creation time)
+                                Overrides automatic last_run.json behavior
+                                (default: cluster creation time, or last_run.json if present)
   -e, --elapsed <time>          CloudTrail capture window (e.g., "3h", "2d", "4days", "3minutes")
-                                (default: 2 hours)
+                                Overrides automatic last_run.json behavior
+                                (default: 2 hours, or last_run.json if present)
   -p, --period <seconds>        CloudWatch metrics period in seconds (default: 300)
+  -l, --last                    Explicitly force using last_run.json (optional, automatic by default)
   -h, --help                    Display this help message and exit
 
 PREREQUISITES:
@@ -71,7 +79,11 @@ PREREQUISITES:
   • Required tools: jq, python3, gdate (macOS: brew install coreutils)
 
 EXAMPLES:
-  # Refresh AWS credentials and collect data in current directory
+  # First run - collect data with default 2-hour window from cluster creation
+  eval \$(ocm backplane cloud credentials <clusterid> -o env)
+  $(basename "$0") -c <clusterid>
+
+  # Subsequent run - automatically reuses the same time range from first run
   eval \$(ocm backplane cloud credentials <clusterid> -o env)
   $(basename "$0") -c <clusterid>
 
@@ -79,7 +91,7 @@ EXAMPLES:
   eval \$(ocm backplane cloud credentials <clusterid> -o env)
   $(basename "$0") -c <clusterid> -d /path/to/cluster/data
 
-  # Use custom CloudTrail time window
+  # Use custom CloudTrail time window (overrides automatic last_run.json)
   eval \$(ocm backplane cloud credentials <clusterid> -o env)
   $(basename "$0") -c <clusterid> -s 2025-01-15T10:30:00Z -e 3h
 
@@ -102,6 +114,9 @@ OUTPUT FILES:
 NOTES:
   • Script is idempotent - safe to run multiple times
   • Existing files are reused (not re-fetched)
+  • Automatically saves run configuration to last_run.json
+  • Subsequent runs without -s/-e will reuse the previous time range
+  • Use -s or -e arguments to override and set a new time range
   • Use with check_aws_health.py for automated health validation
 
 EOF
@@ -115,9 +130,9 @@ printline() {
   printf '%*s\n' "$width" '' | tr ' ' "$char"
 }
 
-# print red text
+# print red text to stderr
 PERR() {
-  echo -e "\033[1;31m$1\033[0m"
+  echo -e "\033[1;31m$1\033[0m" >&2
 }
 
 BLUE() {
@@ -164,6 +179,30 @@ parse_elapsed_time() {
   else
     PERR "Error: Invalid elapsed time format '${input}'. Expected format: <number><unit> (e.g., '3h', '2days')"
     return 1
+  fi
+}
+
+# Write runtime configuration to a JSON file
+# Uses global variables: WRKDIR, clusterid, CAPTURE_START, CAPTURE_END, START_DATE, ELAPSED_TIME, PERIOD
+write_runtime_config_to_file() {
+  local config_file="${WRKDIR}last_run.json"
+
+  cat > "$config_file" << EOF
+{
+  "cluster_id": "${clusterid}",
+  "capture_start": "${CAPTURE_START}",
+  "capture_end": "${CAPTURE_END}",
+  "start_date": "${START_DATE}",
+  "elapsed_time": "${ELAPSED_TIME}",
+  "period": "${PERIOD:-300}",
+  "timestamp": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+}
+EOF
+
+  if [ $? -eq 0 ]; then
+    echo "Runtime configuration saved to: ${config_file}"
+  else
+    PERR "Failed to write runtime configuration to ${config_file}"
   fi
 }
 
@@ -668,6 +707,7 @@ WRKDIR="."
 START_DATE=""
 ELAPSED_TIME=""
 PERIOD=""
+USE_LAST_RUN=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -690,6 +730,10 @@ while [[ $# -gt 0 ]]; do
     -p|--period)
       PERIOD="$2"
       shift 2
+      ;;
+    -l|--last)
+      USE_LAST_RUN=1
+      shift
       ;;
     -h|--help)
       show_help
@@ -723,6 +767,45 @@ if [ ! -d "${WRKDIR}" ]; then
 fi
 # Remove any trailing slashes, replace with a single slash.
 WRKDIR="${WRKDIR%/}/"
+
+# Check if --last flag was provided OR if last_run.json exists and no time args provided
+LAST_RUN_FILE="${WRKDIR}last_run.json"
+
+if [ ${USE_LAST_RUN} -eq 1 ]; then
+  # Explicit --last flag provided
+  if [ ! -f "${LAST_RUN_FILE}" ]; then
+    PERR "Error: --last flag provided but last_run.json not found in ${WRKDIR}"
+    exit 1
+  fi
+
+  BLUE "Loading configuration from previous run (--last flag): ${LAST_RUN_FILE}"
+  CAPTURE_START=$(jq -r '.capture_start' "${LAST_RUN_FILE}")
+  CAPTURE_END=$(jq -r '.capture_end' "${LAST_RUN_FILE}")
+
+  if [ -z "${CAPTURE_START}" ] || [ "${CAPTURE_START}" == "null" ] || [ -z "${CAPTURE_END}" ] || [ "${CAPTURE_END}" == "null" ]; then
+    PERR "Error: Invalid or missing capture_start/capture_end in ${LAST_RUN_FILE}"
+    exit 1
+  fi
+
+  BLUE "Using CAPTURE_START: ${CAPTURE_START}"
+  BLUE "Using CAPTURE_END: ${CAPTURE_END}"
+elif [ -f "${LAST_RUN_FILE}" ] && [ -z "${START_DATE}" ] && [ -z "${ELAPSED_TIME}" ]; then
+  # Automatic: last_run.json exists and no time arguments provided
+  BLUE "Found previous run configuration: ${LAST_RUN_FILE}"
+  BLUE "No time arguments provided (-s/-e), using previous run's time range"
+
+  CAPTURE_START=$(jq -r '.capture_start' "${LAST_RUN_FILE}")
+  CAPTURE_END=$(jq -r '.capture_end' "${LAST_RUN_FILE}")
+
+  if [ -z "${CAPTURE_START}" ] || [ "${CAPTURE_START}" == "null" ] || [ -z "${CAPTURE_END}" ] || [ "${CAPTURE_END}" == "null" ]; then
+    PERR "Warning: Invalid data in ${LAST_RUN_FILE}, will calculate new time range"
+    USE_LAST_RUN=0
+  else
+    BLUE "Using CAPTURE_START: ${CAPTURE_START}"
+    BLUE "Using CAPTURE_END: ${CAPTURE_END}"
+    USE_LAST_RUN=1
+  fi
+fi
 
 BLUE "This may require refreshing local AWS creds, example..."
 BLUE "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
@@ -790,47 +873,50 @@ else
 fi
 
 
-# Determine elapsed time first (needed for ready cluster logic)
-if [ -n "${ELAPSED_TIME}" ]; then
-  CAPTURE_WINDOW=$(parse_elapsed_time "${ELAPSED_TIME}")
-  if [ $? -ne 0 ]; then
-    PERR "Failed to parse elapsed time"
-    exit 1
-  fi
-  BLUE "Using provided elapsed time: ${ELAPSED_TIME} (${CAPTURE_WINDOW})"
-else
-  CAPTURE_WINDOW="2 hours"
-  BLUE "Using default capture window: ${CAPTURE_WINDOW}"
-fi
-
-# Determine start date based on cluster state and provided arguments
-if [ -n "${START_DATE}" ]; then
-  # User provided explicit start date
-  CAPTURE_START="${START_DATE}"
-  CAPTURE_END=$(gdate -u -d "${CAPTURE_START} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
-  BLUE "Using provided start date: ${CAPTURE_START}"
-else
-  # Check cluster state
-  CLUSTER_STATE=$(jq -r '.state' ${CLUSTER_JSON})
-
-  if [ "${CLUSTER_STATE}" == "ready" ]; then
-    # For ready clusters, use current time as end and calculate start as (now - elapsed)
-    CAPTURE_END=$(gdate -u '+%Y-%m-%dT%H:%M:%SZ')
-    CAPTURE_START=$(gdate -u -d "${CAPTURE_END} - ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
-    BLUE "Cluster is in ready state - using current time window"
-    BLUE "Start: ${CAPTURE_START} (${CAPTURE_WINDOW} ago)"
-    BLUE "End: ${CAPTURE_END} (now)"
+# Only calculate time ranges if not using --last flag
+if [ ${USE_LAST_RUN} -ne 1 ]; then
+  # Determine elapsed time first (needed for ready cluster logic)
+  if [ -n "${ELAPSED_TIME}" ]; then
+    CAPTURE_WINDOW=$(parse_elapsed_time "${ELAPSED_TIME}")
+    if [ $? -ne 0 ]; then
+      PERR "Failed to parse elapsed time"
+      exit 1
+    fi
+    BLUE "Using provided elapsed time: ${ELAPSED_TIME} (${CAPTURE_WINDOW})"
   else
-    # For non-ready clusters, use cluster creation time
-    echo "\nFetching cluster create time to use for cloudtrail logs, and metrics..."
-    echo "CREATE_TIME=\$(jq -r '.creation_timestamp' ${CLUSTER_JSON})"
-    CREATE_TIME=$(jq -r '.creation_timestamp' ${CLUSTER_JSON})
-    CAPTURE_START=${CREATE_TIME}
-    CAPTURE_END=$(gdate -u -d "${CAPTURE_START} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
-    BLUE "Cluster is in ${CLUSTER_STATE} state - using cluster creation time as start date: ${CAPTURE_START}"
+    CAPTURE_WINDOW="2 hours"
+    BLUE "Using default capture window: ${CAPTURE_WINDOW}"
   fi
+
+  # Determine start date based on cluster state and provided arguments
+  if [ -n "${START_DATE}" ]; then
+    # User provided explicit start date
+    CAPTURE_START="${START_DATE}"
+    CAPTURE_END=$(gdate -u -d "${CAPTURE_START} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
+    BLUE "Using provided start date: ${CAPTURE_START}"
+  else
+    # Check cluster state
+    CLUSTER_STATE=$(jq -r '.state' ${CLUSTER_JSON})
+
+    if [ "${CLUSTER_STATE}" == "ready" ]; then
+      # For ready clusters, use current time as end and calculate start as (now - elapsed)
+      CAPTURE_END=$(gdate -u '+%Y-%m-%dT%H:%M:%SZ')
+      CAPTURE_START=$(gdate -u -d "${CAPTURE_END} - ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
+      BLUE "Cluster is in ready state - using current time window"
+      BLUE "Start: ${CAPTURE_START} (${CAPTURE_WINDOW} ago)"
+      BLUE "End: ${CAPTURE_END} (now)"
+    else
+      # For non-ready clusters, use cluster creation time
+      echo "\nFetching cluster create time to use for cloudtrail logs, and metrics..."
+      echo "CREATE_TIME=\$(jq -r '.creation_timestamp' ${CLUSTER_JSON})"
+      CREATE_TIME=$(jq -r '.creation_timestamp' ${CLUSTER_JSON})
+      CAPTURE_START=${CREATE_TIME}
+      CAPTURE_END=$(gdate -u -d "${CAPTURE_START} + ${CAPTURE_WINDOW}" '+%Y-%m-%dT%H:%M:%SZ')
+      BLUE "Cluster is in ${CLUSTER_STATE} state - using cluster creation time as start date: ${CAPTURE_START}"
+    fi
+  fi
+  BLUE "Using capture start time: ${CAPTURE_START}, end time: ${CAPTURE_END}"
 fi
-BLUE "Using capture start time: ${CAPTURE_START}, end time: ${CAPTURE_END}"
 
 DOMAIN_PREFIX=$(jq -r '.domain_prefix' ${CLUSTER_JSON})
 INFRA_ID=$(jq -r '.infra_id' ${CLUSTER_JSON})
@@ -1118,3 +1204,7 @@ get_security_groups_info
 ##############################
 HDR "Getting Load Balancers"
 get_load_balancers_info
+
+##############################
+# Save runtime configuration for potential future --last usage
+write_runtime_config_to_file
