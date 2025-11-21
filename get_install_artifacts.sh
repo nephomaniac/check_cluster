@@ -625,63 +625,47 @@ printline
 # Fetch the route53 info...
 HDR "Getting route53 info..."
 BASE_DOMAIN=$(jq -r '.dns.base_domain' ${CLUSTER_JSON})
-CLUSTER_DOMAIN="${DOMAIN_PREFIX}.${BASE_DOMAIN}"
-API_RECORD_SETS=${WRKDIR}${clusterid}_route53_api_record_sets.json
-APPS_RECORD_SETS=${WRKDIR}${clusterid}_route53_apps_record_sets.json
+BASE_DOMAIN="${DOMAIN_PREFIX}.${BASE_DOMAIN}"
 HOSTED_ZONES=${WRKDIR}${clusterid}_hosted_zones.json
 
-echo "CLUSTER_DOMAIN=\"${DOMAIN_PREFIX}.${BASE_DOMAIN}\""
+echo "BASE_DOMAIN=\"${DOMAIN_PREFIX}.${BASE_DOMAIN}\""
 
-echo "ZONE_ID=\$(aws route53 list-hosted-zones --query \"HostedZones[?Name=='${CLUSTER_DOMAIN}.'].Id\" --output text | cut -d'/' -f3)"
 
 if [ -f ${HOSTED_ZONES} ]; then
   GREEN "using existing file: ${HOSTED_ZONES}"
 else
-  BLUE "fetching hosted zone for cluster domain ${CLUSTER_DOMAIN}..."
-  echo "aws route53 list-hosted-zones --query \"HostedZones[?Name=='${CLUSTER_DOMAIN}.'].Id\" --output json > ${HOSTED_ZONES}"
-  OUT=$(aws route53 list-hosted-zones --query "HostedZones[?Name=='${CLUSTER_DOMAIN}.'].Id" --output json)
+  BLUE "fetching hosted zone for cluster domain ${BASE_DOMAIN}..."
+  echo "aws route53 list-hosted-zones --query \"HostedZones[?contains(Name, '${BASE_DOMAIN}')]\" --output json"
+  OUT=$(aws route53 list-hosted-zones --query "HostedZones[?contains(Name, '${BASE_DOMAIN}')]" --output json)
   if [[ $? -eq 0 && -n "${OUT}" ]]; then
       echo $OUT > ${HOSTED_ZONES}
   else 
-      PERR "Failed to fetch hosted zones for domain ${CLUSTER_DOMAIN}"
+      PERR "Failed to fetch hosted zones for domain ${BASE_DOMAIN}"
   fi
    
 fi
 ZONE_ID=""
 if [ -f ${HOSTED_ZONES} ]; then
   echo "\nGetting hosted ZONE_ID from ${HOSTED_ZONES}..."
-  echo "ZONE_ID=\$( jq -r '.[0] | split("/")[2]' ${HOSTED_ZONES})"
-  ZONE_ID=$(jq -r '.[0] | split("/")[2]' ${HOSTED_ZONES})
-fi 
-if [ -n "$ZONE_ID" ]; then
-  if [ -f ${API_RECORD_SETS} ]; then
-    GREEN "using existing file ${API_RECORD_SETS}"
-  else
-    BLUE "Fetching API records sets for hosted zone ${ZONE_ID} ..."
-    echo "aws route53 list-resource-record-sets --hosted-zone-id \"$ZONE_ID\" --query \"ResourceRecordSets[?Name=='api.${CLUSTER_DOMAIN}.']\" --output json > ${API_RECORD_SETS}"
-    RSOUT=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Name=='api.${CLUSTER_DOMAIN}.']" --output json)
-    if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
-      echo ${RSOUT} > ${API_RECORD_SETS}
-    else
-      PERR "Failed to get API record sets"
+  for ZONE_ID in $(jq -r '.[].Id | split("/")[2]'   ${HOSTED_ZONES}); do
+    if [ -n "$ZONE_ID" ]; then
+      RECORD_SETS=${WRKDIR}${clusterid}_route53_${ZONE_ID}.records.json
+      if [ -f ${RECORD_SETS} ]; then
+        GREEN "using existing file ${RECORD_SETS}"
+      else
+        BLUE "Fetching API records sets for hosted zone ${ZONE_ID} ..."
+        echo "aws route53 list-resource-record-sets --hosted-zone-id \"$ZONE_ID\" --output json"
+        RSOUT=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --output json)
+        if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
+          echo ${RSOUT} > ${RECORD_SETS}
+        else
+          PERR "Failed to get API record sets"
+        fi
+      fi
     fi
-  fi
-
-  if [ -f ${APPS_RECORD_SETS} ]; then
-    GREEN "using existing file ${APPS_RECORD_SETS}"
-  else
-    BLUE "Fetching APPS records sets for hosted zone ${ZONE_ID} ..."
-    echo "aws route53 list-resource-record-sets --hosted-zone-id \"$ZONE_ID\" --query \"ResourceRecordSets[?Name=='*.apps.${CLUSTER_DOMAIN}.']\" --output json > ${APPS_RECORD_SETS}"
-    RSOUT=$(aws route53 list-resource-record-sets --hosted-zone-id "$ZONE_ID" --query "ResourceRecordSets[?Name=='*.apps.${CLUSTER_DOMAIN}.']" --output json)
-    if [[ $? -eq 0 && -n "$RSOUT" ]]; then 
-      echo ${RSOUT} > ${APPS_RECORD_SETS}
-    else
-      PERR "Failed to get APP record sets"
-    fi
-  fi
-
+  done
 else
-  PERR "No zone found for cluster domain:'${CLUSTER_DOMAIN}' ?"
+  PERR "No zone found for cluster domain:'${BASE_DOMAIN}' ?"
 fi
 
 

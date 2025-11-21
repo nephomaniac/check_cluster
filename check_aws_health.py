@@ -15,6 +15,7 @@ from typing import Dict, List, Tuple
 # Global variables
 markdown_output = []  # Accumulate markdown output
 source_directory = Path('.')  # Source directory for cluster data files
+cluster_state = 'unknown'  # Cluster state (ready, error, installing, etc.)
 
 def add_markdown(text: str):
     """Add text to markdown output"""
@@ -60,12 +61,13 @@ def print_status(status: str, message: str):
     # Add to markdown
     add_markdown(f"{md_badge} **{status}**: {message}\n\n")
 
-def load_json_file(filename: str) -> Dict:
+def load_json_file(filename: str, suppress_warning: bool = False) -> Dict:
     """Load a JSON file and return its contents"""
     global source_directory
     filepath = source_directory / filename
     if not filepath.exists():
-        print_status("WARNING", f"File not found: {filename}")
+        if not suppress_warning:
+            print_status("WARNING", f"File not found: {filename}")
         return {}
 
     try:
@@ -303,7 +305,9 @@ def get_cluster_resource_ids(cluster_id: str, infra_id: str) -> Dict:
                             cluster_resources['all_ids'].add(subnet)
 
     # 4. Scan install logs from resources.json
-    resources_data = load_json_file(f"{cluster_id}_resources.json")
+    # Don't warn if resources.json is missing for ready clusters (only contains install-time data)
+    suppress_warning = (cluster_state == 'ready')
+    resources_data = load_json_file(f"{cluster_id}_resources.json", suppress_warning=suppress_warning)
     if resources_data:
         # Parse install logs which may contain resource IDs
         install_logs = resources_data.get('resources', {}).get('install_logs', '')
@@ -929,9 +933,36 @@ def check_security_groups(cluster_id: str, infra_id: str = None) -> Tuple[str, L
                                 faulty_resource_ids.append(sg_id)
                             issue_msg = f"{required_sg_name} ({sg_id}): Public cluster but {rule_description} only allows VPC traffic ({source_str}), should allow 0.0.0.0/0 or specific installer IP"
                             issues.append(issue_msg)
-                            print_status("WARNING", f"Public cluster but rule only allows VPC traffic - may cause installation failures")
-                            print(f"    Expected rule: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)")
-                            add_markdown(f"- **Expected rule**: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)\n\n")
+
+                            # Extra emphasis for port 6443 on apiserver-lb - critical for installation
+                            if required_port == 6443 and 'apiserver-lb' in required_sg_name:
+                                print_status("ERROR", f"CRITICAL: Missing public access to Kubernetes API (port 6443)")
+                                print(f"    {Colors.RED}{Colors.BOLD}Impact: Cluster installation will fail with 'KubeAPIWaitFailed'{Colors.END}")
+                                print(f"    {Colors.YELLOW}Current access: {source_str} (VPC-only){Colors.END}")
+                                print(f"    {Colors.GREEN}Required: 0.0.0.0/0 (public access) or specific installer IP{Colors.END}")
+                                print(f"\n    {Colors.BOLD}Remediation:{Colors.END}")
+                                print(f"    aws ec2 authorize-security-group-ingress \\")
+                                print(f"      --group-id {sg_id} \\")
+                                print(f"      --protocol tcp \\")
+                                print(f"      --port 6443 \\")
+                                print(f"      --cidr 0.0.0.0/0 \\")
+                                print(f"      --description 'Kubernetes API Server traffic for public access'")
+                                add_markdown(f"\n**CRITICAL ISSUE**: Missing public access to Kubernetes API (port 6443)\n\n")
+                                add_markdown(f"- **Impact**: Cluster installation fails with `KubeAPIWaitFailed`\n")
+                                add_markdown(f"- **Current access**: `{source_str}` (VPC-only)\n")
+                                add_markdown(f"- **Required**: `0.0.0.0/0` (public access) or specific installer IP\n\n")
+                                add_markdown(f"**Remediation**:\n```bash\n")
+                                add_markdown(f"aws ec2 authorize-security-group-ingress \\\\\n")
+                                add_markdown(f"  --group-id {sg_id} \\\\\n")
+                                add_markdown(f"  --protocol tcp \\\\\n")
+                                add_markdown(f"  --port 6443 \\\\\n")
+                                add_markdown(f"  --cidr 0.0.0.0/0 \\\\\n")
+                                add_markdown(f"  --description 'Kubernetes API Server traffic for public access'\n")
+                                add_markdown(f"```\n\n")
+                            else:
+                                print_status("WARNING", f"Public cluster but rule only allows VPC traffic - may cause installation failures")
+                                print(f"    Expected rule: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)")
+                                add_markdown(f"- **Expected rule**: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)\n\n")
 
                         elif is_private_cluster and has_public_access:
                             # Private cluster should not have public access on API/MCS ports
@@ -1202,25 +1233,24 @@ def check_security_groups(cluster_id: str, infra_id: str = None) -> Tuple[str, L
                 else:
                     print_status("OK", "Public cluster configuration appears consistent")
 
-    if not issues:
-        print_status("OK", "All required security groups and rules are present")
-        return ("OK", [])
-    else:
-        # Search CloudTrail for security group related events using specific resource IDs
+    # Only search CloudTrail if we have specific faulty security groups
+    if faulty_resource_ids:
         search_terms = [infra_id, 'SecurityGroup', 'AuthorizeSecurityGroupIngress',
                        'CreateSecurityGroup', 'RevokeSecurityGroupIngress',
                        'ModifySecurityGroupRules', 'InvalidGroup']
 
-        # Add specific faulty security group IDs to search terms
-        if faulty_resource_ids:
-            print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty security groups:{Colors.END}")
-            print(f"  Security Group IDs: {', '.join(faulty_resource_ids)}")
+        print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty security groups:{Colors.END}")
+        print(f"  Security Group IDs: {', '.join(faulty_resource_ids)}")
 
         related_events = find_related_cloudtrail_events(cluster_id, infra_id, search_terms,
-                                                        required_resource_ids=faulty_resource_ids if faulty_resource_ids else None,
+                                                        required_resource_ids=faulty_resource_ids,
                                                         max_results=10)
         print_cloudtrail_correlation(related_events, "Security Group Configuration", cluster_id, infra_id)
 
+    if not issues:
+        print_status("OK", "All required security groups and rules are present")
+        return ("OK", [])
+    else:
         return ("ERROR" if len(issues) > 3 else "WARNING", issues)
 
 def check_instances(cluster_id: str, infra_id: str = None) -> Tuple[str, List[str]]:
@@ -1328,25 +1358,102 @@ def check_instances(cluster_id: str, infra_id: str = None) -> Tuple[str, List[st
         print_status("WARNING", f"No instances found for infra ID {infra_id}")
         return ("WARNING", ["No cluster instances found"])
 
-    if issues:
-        for issue in issues:
-            print_status("WARNING", issue)
+    # For ready clusters, perform additional validation
+    if cluster_state == 'ready':
+        print(f"\n{Colors.BOLD}Ready Cluster Validation:{Colors.END}")
 
-        # Search CloudTrail for instance-related events using specific instance IDs
+        # Count instances by role
+        role_counts = {'master': 0, 'worker': 0, 'infra': 0, 'bootstrap': 0, 'unknown': 0}
+        non_running_instances = []
+        bootstrap_instances = []
+
+        for instance in cluster_instances:
+            state = instance.get('State', 'unknown')
+            instance_id = instance.get('InstanceId', 'unknown')
+            tags = instance.get('Tags', [])
+            instance_name = 'N/A'
+            node_role = 'unknown'
+
+            # Determine role
+            for tag in tags:
+                key = tag.get('Key', '')
+                value = tag.get('Value', '')
+                if key == 'Name':
+                    instance_name = value
+                if 'bootstrap' in value.lower():
+                    node_role = 'bootstrap'
+                elif 'master' in value.lower() or 'control-plane' in value.lower():
+                    if node_role == 'unknown':
+                        node_role = 'master'
+                elif 'infra' in value.lower():
+                    if node_role == 'unknown':
+                        node_role = 'infra'
+                elif 'worker' in value.lower():
+                    if node_role == 'unknown':
+                        node_role = 'worker'
+
+            role_counts[node_role] = role_counts.get(node_role, 0) + 1
+
+            # Check for bootstrap instances (should not exist in ready clusters)
+            if node_role == 'bootstrap':
+                bootstrap_instances.append(f"{instance_id} ({instance_name})")
+                if state == 'running':
+                    issues.append(f"Ready cluster has running bootstrap instance: {instance_id}")
+                    print_status("WARNING", f"Bootstrap instance still running: {instance_id}")
+                    print(f"  {Colors.YELLOW}Note: Bootstrap instances should be terminated after successful installation{Colors.END}")
+
+            # For production nodes (master, worker, infra), state must be running
+            elif node_role in ['master', 'worker', 'infra']:
+                if state != 'running':
+                    non_running_instances.append(f"{node_role}: {instance_id} ({instance_name}) - state: {state}")
+                    issues.append(f"Ready cluster has non-running {node_role} instance: {instance_id} ({state})")
+                    print_status("ERROR", f"Production instance not running: {node_role} {instance_id} ({state})")
+                    print(f"  {Colors.YELLOW}Impact: Reduced cluster capacity and potential service degradation{Colors.END}")
+
+        # Check minimum expected instance counts
+        print(f"\n  Instance counts by role:")
+        print(f"    Master nodes: {role_counts['master']}")
+        print(f"    Worker nodes: {role_counts['worker']}")
+        print(f"    Infra nodes: {role_counts['infra']}")
+        if role_counts['bootstrap'] > 0:
+            print(f"    Bootstrap nodes: {role_counts['bootstrap']} (should be 0 for ready cluster)")
+
+        # Validate minimum master nodes (should be 3 for HA)
+        if role_counts['master'] < 3:
+            issues.append(f"Ready cluster has {role_counts['master']} master nodes (expected 3 for HA)")
+            print_status("WARNING", f"Only {role_counts['master']} master node(s) found (expected 3 for HA)")
+
+        # Validate minimum worker nodes (should be at least 2)
+        if role_counts['worker'] < 2:
+            issues.append(f"Ready cluster has {role_counts['worker']} worker nodes (expected at least 2)")
+            print_status("WARNING", f"Only {role_counts['worker']} worker node(s) found (expected at least 2)")
+
+        # Summary
+        if non_running_instances:
+            print(f"\n  {Colors.BOLD}Non-running production instances:{Colors.END}")
+            for inst in non_running_instances:
+                print(f"    - {inst}")
+
+        if bootstrap_instances:
+            print(f"\n  {Colors.BOLD}Bootstrap instances (should be terminated):{Colors.END}")
+            for inst in bootstrap_instances:
+                print(f"    - {inst}")
+
+    # Only search CloudTrail if we have specific faulty instances
+    if faulty_instance_ids:
         search_terms = [infra_id, 'RunInstances', 'TerminateInstances', 'StopInstances',
                        'StartInstances', 'InsufficientInstanceCapacity', 'InvalidParameterValue',
                        'Unsupported', 'InstanceLimitExceeded']
 
-        # Add specific faulty instance IDs to search terms
-        if faulty_instance_ids:
-            print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty instances:{Colors.END}")
-            print(f"  Instance IDs: {', '.join(faulty_instance_ids)}")
+        print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty instances:{Colors.END}")
+        print(f"  Instance IDs: {', '.join(faulty_instance_ids)}")
 
         related_events = find_related_cloudtrail_events(cluster_id, infra_id, search_terms,
-                                                        required_resource_ids=faulty_instance_ids if faulty_instance_ids else None,
+                                                        required_resource_ids=faulty_instance_ids,
                                                         max_results=10)
         print_cloudtrail_correlation(related_events, "EC2 Instance Issues", cluster_id, infra_id)
 
+    if issues:
         return ("WARNING", issues)
     else:
         return ("OK", [])
@@ -1414,27 +1521,82 @@ def check_load_balancers(cluster_id: str, infra_id: str = None) -> Tuple[str, Li
         print_status("WARNING", f"No load balancers found for infra ID {infra_id}")
         return ("WARNING", ["No cluster load balancers found"])
 
-    if issues:
-        # Search CloudTrail for load balancer related events using specific ARNs
+    # For ready clusters, perform additional validation
+    if cluster_state == 'ready':
+        print(f"\n{Colors.BOLD}Ready Cluster Validation:{Colors.END}")
+
+        # Check for expected load balancers
+        expected_lbs = {
+            f"{infra_id}-ext": {"found": False, "type": "network", "scheme": "internet-facing"},
+            f"{infra_id}-int": {"found": False, "type": "network", "scheme": "internal"}
+        }
+
+        for lb in cluster_lbs:
+            lb_name = lb.get('LoadBalancerName', '')
+            lb_type = lb.get('Type', 'unknown')
+            lb_scheme = lb.get('Scheme', 'unknown')
+            lb_state = lb.get('State', {}).get('Code', 'unknown')
+
+            # Check if this is an expected LB
+            if lb_name in expected_lbs:
+                expected_lbs[lb_name]["found"] = True
+
+                # Validate type and scheme
+                expected_type = expected_lbs[lb_name]["type"]
+                expected_scheme = expected_lbs[lb_name]["scheme"]
+
+                if lb_type != expected_type:
+                    issues.append(f"Load balancer {lb_name} has type '{lb_type}' (expected '{expected_type}')")
+                    print_status("ERROR", f"LB {lb_name} has incorrect type: {lb_type}")
+
+                if lb_scheme != expected_scheme:
+                    issues.append(f"Load balancer {lb_name} has scheme '{lb_scheme}' (expected '{expected_scheme}')")
+                    print_status("ERROR", f"LB {lb_name} has incorrect scheme: {lb_scheme}")
+
+            # For ready clusters, all LBs MUST be active
+            if lb_state != 'active':
+                issues.append(f"Ready cluster has non-active load balancer: {lb_name} (state: {lb_state})")
+                print_status("ERROR", f"LB {lb_name} is not active in ready cluster")
+
+        # Check for missing expected load balancers
+        for lb_name, lb_info in expected_lbs.items():
+            if not lb_info["found"]:
+                issues.append(f"Ready cluster missing expected load balancer: {lb_name}")
+                print_status("ERROR", f"Missing expected load balancer: {lb_name}")
+                print(f"  {Colors.YELLOW}Impact: Cluster API and applications may be unreachable{Colors.END}")
+
+        # Check for router load balancer (hash-like name pattern)
+        router_lbs = [lb for lb in cluster_lbs
+                     if not lb['LoadBalancerName'].startswith(infra_id)]
+
+        if len(router_lbs) == 0:
+            issues.append("Ready cluster missing router/ingress load balancer")
+            print_status("WARNING", "No router/ingress load balancer found")
+            print(f"  {Colors.YELLOW}Expected: Load balancer with hash-like name for ingress routing{Colors.END}")
+        else:
+            print_status("OK", f"Found {len(router_lbs)} router/ingress load balancer(s)")
+
+    # Only search CloudTrail if we have specific faulty resources
+    if faulty_lb_arns:
         search_terms = [infra_id, 'CreateLoadBalancer', 'ModifyLoadBalancer',
                        'DeleteLoadBalancer', 'RegisterTargets', 'DeregisterTargets',
                        'CreateTargetGroup', 'InvalidTarget', 'TargetNotFound']
 
         # Add specific faulty load balancer ARNs and names to search terms
         all_lb_identifiers = []
-        if faulty_lb_arns:
-            print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty load balancers:{Colors.END}")
-            # Extract LB names from ARNs for better readability
-            lb_names = [arn.split('/')[-2] if '/' in arn else arn for arn in faulty_lb_arns]
-            print(f"  Load Balancer ARNs: {', '.join(lb_names)}")
-            all_lb_identifiers.extend(faulty_lb_arns)
-            all_lb_identifiers.extend(lb_names)
+        print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty load balancers:{Colors.END}")
+        # Extract LB names from ARNs for better readability
+        lb_names = [arn.split('/')[-2] if '/' in arn else arn for arn in faulty_lb_arns]
+        print(f"  Load Balancer ARNs: {', '.join(lb_names)}")
+        all_lb_identifiers.extend(faulty_lb_arns)
+        all_lb_identifiers.extend(lb_names)
 
         related_events = find_related_cloudtrail_events(cluster_id, infra_id, search_terms,
-                                                        required_resource_ids=all_lb_identifiers if all_lb_identifiers else None,
+                                                        required_resource_ids=all_lb_identifiers,
                                                         max_results=10)
         print_cloudtrail_correlation(related_events, "Load Balancer Issues", cluster_id, infra_id)
 
+    if issues:
         return ("WARNING", issues)
     else:
         return ("OK", [])
@@ -1447,44 +1609,178 @@ def check_route53(cluster_id: str) -> Tuple[str, List[str]]:
     print_header("Route53 Health Check")
 
     issues = []
+    global source_directory
 
     # Check hosted zones
-    zones_data = load_json_file(f"{cluster_id}_hosted_zones.json")
-    print(f"Hosted Zones file loaded: {bool(zones_data)}")
+    zones_data = load_json_file(f"{cluster_id}_hosted_zones.json", suppress_warning=True)
 
-    # Check API record sets
-    api_data = load_json_file(f"{cluster_id}_route53_api_record_sets.json")
-    if api_data:
-        print(f"\nAPI Record Sets: {len(api_data) if isinstance(api_data, list) else 0}")
-        if isinstance(api_data, list):
-            for record in api_data:
-                name = record.get('Name', 'unknown')
-                rec_type = record.get('Type', 'unknown')
+    if zones_data:
+        print(f"Hosted Zones found: {len(zones_data) if isinstance(zones_data, list) else 1}")
 
-                if 'AliasTarget' in record:
-                    target = record['AliasTarget'].get('DNSName', 'unknown')
-                    print_status("OK", f"API DNS: {name} ({rec_type}) -> {target}")
-                elif 'ResourceRecords' in record:
-                    targets = [r.get('Value', '') for r in record.get('ResourceRecords', [])]
-                    print_status("OK", f"API DNS: {name} ({rec_type}) -> {', '.join(targets)}")
+        # Extract zone IDs from hosted zones data
+        zone_ids = []
+        if isinstance(zones_data, list):
+            for zone in zones_data:
+                if isinstance(zone, dict):
+                    # New format: array of zone objects
+                    zone_id = zone.get('Id', '')
+                    if zone_id:
+                        # Extract just the ID part (remove /hostedzone/ prefix)
+                        zone_id = zone_id.split('/')[-1]
+                        zone_ids.append(zone_id)
+                        zone_name = zone.get('Name', 'unknown')
+                        is_private = zone.get('Config', {}).get('PrivateZone', False)
+                        print(f"  Zone: {zone_name} ({zone_id}) - {'Private' if is_private else 'Public'}")
+                elif isinstance(zone, str):
+                    # Old format: array of zone ID strings
+                    zone_id = zone.split('/')[-1]
+                    zone_ids.append(zone_id)
+                    print(f"  Zone ID: {zone_id}")
     else:
-        issues.append("No API record sets found")
-        print_status("WARNING", "No API record sets found")
+        print_status("WARNING", "No hosted zones file found")
 
-    # Check apps record sets
-    apps_data = load_json_file(f"{cluster_id}_route53_apps_record_sets.json")
-    if apps_data and isinstance(apps_data, list) and len(apps_data) > 0:
-        print(f"\nApps Record Sets: {len(apps_data)}")
-        for record in apps_data:
+    # Try to load records from new format (route53_{ZONE_ID}.records.json)
+    all_records = []
+    for zone_id in zone_ids:
+        records_file = f"{cluster_id}_route53_{zone_id}.records.json"
+        records_data = load_json_file(records_file, suppress_warning=True)
+        if records_data and 'ResourceRecordSets' in records_data:
+            all_records.extend(records_data['ResourceRecordSets'])
+            print(f"\nLoaded {len(records_data['ResourceRecordSets'])} records from {records_file}")
+
+    # If no records found in new format, try old format (api_record_sets.json, apps_record_sets.json)
+    if not all_records:
+        api_data = load_json_file(f"{cluster_id}_route53_api_record_sets.json", suppress_warning=True)
+        if api_data and isinstance(api_data, list):
+            all_records.extend(api_data)
+            print(f"\nLoaded {len(api_data)} API records from old format")
+
+        apps_data = load_json_file(f"{cluster_id}_route53_apps_record_sets.json", suppress_warning=True)
+        if apps_data and isinstance(apps_data, list):
+            all_records.extend(apps_data)
+            print(f"Loaded {len(apps_data)} Apps records from old format")
+
+    if not all_records:
+        if cluster_state == 'ready':
+            issues.append("Ready cluster missing DNS records")
+            print_status("ERROR", "No DNS records found - required for ready cluster")
+            print(f"  {Colors.YELLOW}Impact: Cluster API and apps endpoints cannot be resolved{Colors.END}")
+        else:
+            print_status("WARNING", "No DNS records found")
+        return ("ERROR" if cluster_state == 'ready' else "WARNING", issues)
+
+    # Parse records and categorize
+    api_record = None
+    api_int_record = None
+    apps_wildcard_record = None
+    other_records = []
+
+    for record in all_records:
+        name = record.get('Name', '').lower()
+        rec_type = record.get('Type', 'unknown')
+
+        # Skip NS and SOA records (infrastructure records)
+        if rec_type in ['NS', 'SOA']:
+            continue
+
+        if name.startswith('api.') and not name.startswith('api-int.'):
+            api_record = record
+        elif name.startswith('api-int.'):
+            api_int_record = record
+        elif '\\052.apps.' in name or '*.apps.' in name:
+            apps_wildcard_record = record
+        else:
+            other_records.append(record)
+
+    # Validate API record
+    print(f"\n{Colors.BOLD}DNS Records Analysis:{Colors.END}")
+
+    if api_record:
+        name = api_record.get('Name', 'unknown')
+        rec_type = api_record.get('Type', 'unknown')
+
+        if 'AliasTarget' in api_record:
+            target = api_record['AliasTarget'].get('DNSName', 'unknown')
+            print_status("OK", f"API endpoint: {name} ({rec_type}) -> {target}")
+
+            # For ready clusters, validate DNS target
+            if cluster_state == 'ready':
+                if '-int-' not in target.lower():
+                    issues.append(f"API DNS {name} points to unexpected target: {target} (expected internal LB)")
+                    print_status("WARNING", "API DNS should point to internal load balancer")
+                    print(f"  {Colors.YELLOW}Expected format: {{infra_id}}-int-{{hash}}.elb.{{region}}.amazonaws.com{Colors.END}")
+        elif 'ResourceRecords' in api_record:
+            targets = [r.get('Value', '') for r in api_record.get('ResourceRecords', [])]
+            print_status("OK", f"API endpoint: {name} ({rec_type}) -> {', '.join(targets)}")
+    else:
+        if cluster_state == 'ready':
+            issues.append("Ready cluster missing API DNS record (api.{cluster}.{domain})")
+            print_status("ERROR", "API DNS record not found")
+            print(f"  {Colors.YELLOW}Impact: Cluster API endpoint cannot be resolved{Colors.END}")
+        else:
+            print_status("WARNING", "API DNS record not found")
+
+    # Validate API-INT record
+    if api_int_record:
+        name = api_int_record.get('Name', 'unknown')
+        rec_type = api_int_record.get('Type', 'unknown')
+
+        if 'AliasTarget' in api_int_record:
+            target = api_int_record['AliasTarget'].get('DNSName', 'unknown')
+            print_status("OK", f"Internal API endpoint: {name} ({rec_type}) -> {target}")
+        elif 'ResourceRecords' in api_int_record:
+            targets = [r.get('Value', '') for r in api_int_record.get('ResourceRecords', [])]
+            print_status("OK", f"Internal API endpoint: {name} ({rec_type}) -> {', '.join(targets)}")
+    else:
+        if cluster_state == 'ready':
+            issues.append("Ready cluster missing internal API DNS record (api-int.{cluster}.{domain})")
+            print_status("WARNING", "Internal API DNS record not found")
+        else:
+            print_status("WARNING", "Internal API DNS record not found")
+
+    # Validate Apps wildcard record
+    if apps_wildcard_record:
+        name = apps_wildcard_record.get('Name', 'unknown')
+        rec_type = apps_wildcard_record.get('Type', 'unknown')
+
+        if 'AliasTarget' in apps_wildcard_record:
+            target = apps_wildcard_record['AliasTarget'].get('DNSName', 'unknown')
+            print_status("OK", f"Apps wildcard: {name} ({rec_type}) -> {target}")
+
+            # Validate it points to router/ingress LB (not -int-)
+            if cluster_state == 'ready' and '-int-' in target.lower():
+                issues.append(f"Apps wildcard DNS points to internal LB (should point to router/ingress LB)")
+                print_status("WARNING", "Apps wildcard should point to router/ingress LB, not internal LB")
+        elif 'ResourceRecords' in apps_wildcard_record:
+            targets = [r.get('Value', '') for r in apps_wildcard_record.get('ResourceRecords', [])]
+            print_status("OK", f"Apps wildcard: {name} ({rec_type}) -> {', '.join(targets)}")
+    else:
+        if cluster_state == 'ready':
+            issues.append("Apps wildcard DNS record not found (*.apps.{cluster}.{domain})")
+            print_status("WARNING", "Apps wildcard DNS record not found")
+            print(f"  {Colors.YELLOW}Impact: Application routes may not be accessible{Colors.END}")
+        else:
+            print_status("WARNING", "Apps wildcard DNS record not found (may be expected for failed installations)")
+
+    # Show other records if any
+    if other_records:
+        print(f"\n{Colors.BOLD}Other DNS records:{Colors.END}")
+        for record in other_records[:5]:  # Show first 5
             name = record.get('Name', 'unknown')
             rec_type = record.get('Type', 'unknown')
-            print_status("OK", f"Apps DNS: {name} ({rec_type})")
-    else:
-        issues.append("No apps record sets found (may be expected for failed installations)")
-        print_status("WARNING", "No apps record sets found")
+            print(f"  {name} ({rec_type})")
+        if len(other_records) > 5:
+            print(f"  ... and {len(other_records) - 5} more records")
+
+    # Summary
+    print(f"\n{Colors.BOLD}DNS Records Summary:{Colors.END}")
+    print(f"  API endpoint: {'✓' if api_record else '✗'}")
+    print(f"  Internal API endpoint: {'✓' if api_int_record else '✗'}")
+    print(f"  Apps wildcard: {'✓' if apps_wildcard_record else '✗'}")
+    print(f"  Total records: {len(all_records)} (excluding NS/SOA)")
 
     if issues:
-        return ("WARNING", issues)
+        return ("ERROR" if cluster_state == 'ready' and any('missing API DNS' in issue for issue in issues) else "WARNING", issues)
     else:
         return ("OK", [])
 
@@ -1514,6 +1810,7 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
     error_events = []
     warning_events = []
     delete_revoke_events = []
+    # Track event counts: {name: {'success': count, 'error': count}}
     event_sources = {}
     event_names = {}
 
@@ -1537,16 +1834,31 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
         event_time = event.get('EventTime', '')
         username = event.get('Username', '')
 
-        event_sources[event_source] = event_sources.get(event_source, 0) + 1
-        event_names[event_name] = event_names.get(event_name, 0) + 1
+        # Initialize counters if not exists
+        if event_source not in event_sources:
+            event_sources[event_source] = {'success': 0, 'error': 0}
+        if event_name not in event_names:
+            event_names[event_name] = {'success': 0, 'error': 0}
 
-        # Parse CloudTrailEvent JSON
+        # Parse CloudTrailEvent JSON to determine if error
         cloud_trail_event = event.get('CloudTrailEvent', '{}')
         try:
             ct_data = json.loads(cloud_trail_event)
             error_code = ct_data.get('errorCode', '')
             error_message = ct_data.get('errorMessage', '')
             event_str = json.dumps(ct_data)
+
+            # Count success vs error
+            if error_code:
+                event_sources[event_source]['error'] += 1
+                event_names[event_name]['error'] += 1
+            else:
+                event_sources[event_source]['success'] += 1
+                event_names[event_name]['success'] += 1
+
+            # Skip BucketAlreadyOwnedByYou errors (informational only, not actionable)
+            if error_code == 'BucketAlreadyOwnedByYou':
+                continue
 
             # Check for delete/revoke type events (matching EventName contains pattern)
             # This mimics: select(.EventName | contains("Delete") or contains("Revoke") or ...)
@@ -1563,6 +1875,17 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
 
                 # Check if cluster-related
                 is_cluster_related = infra_id in event_str or cluster_id in event_str
+
+                # For "ready" state clusters, filter out bootstrap/installer events
+                is_bootstrap_or_installer = False
+                if cluster_state == 'ready':
+                    bootstrap_keywords = ['bootstrap', 'installer', 'install', 'provision']
+                    event_str_lower = event_str.lower()
+                    is_bootstrap_or_installer = any(keyword in event_str_lower for keyword in bootstrap_keywords)
+
+                # Skip bootstrap/installer events for ready clusters
+                if cluster_state == 'ready' and is_bootstrap_or_installer:
+                    continue
 
                 delete_revoke_events.append({
                     'name': event_name,
@@ -1592,15 +1915,23 @@ def check_cloudtrail_logs(cluster_id: str, infra_id: str = None) -> Tuple[str, L
                         'error_message': error_message[:100]
                     })
         except json.JSONDecodeError:
-            pass
+            # If JSON parsing fails, count as success (can't determine error status)
+            event_sources[event_source]['success'] += 1
+            event_names[event_name]['success'] += 1
 
     print(f"\nTop Event Sources:")
-    for source, count in sorted(event_sources.items(), key=lambda x: x[1], reverse=True)[:5]:
-        print(f"  {source}: {count}")
+    for source, counts in sorted(event_sources.items(), key=lambda x: x[1]['success'] + x[1]['error'], reverse=True)[:5]:
+        success = counts['success']
+        error = counts['error']
+        total = success + error
+        print(f"  {source}: {Colors.GREEN}{success}{Colors.END}: Errs:{Colors.RED}{error}{Colors.END}: Total:{total}")
 
     print(f"\nTop Event Names:")
-    for name, count in sorted(event_names.items(), key=lambda x: x[1], reverse=True)[:5]:
-        print(f"  {name}: {count}")
+    for name, counts in sorted(event_names.items(), key=lambda x: x[1]['success'] + x[1]['error'], reverse=True)[:5]:
+        success = counts['success']
+        error = counts['error']
+        total = success + error
+        print(f"  {name}: {Colors.GREEN}{success}{Colors.END}: Errs:{Colors.RED}{error}{Colors.END}: Total:{total}")
 
     # Display delete/revoke/stop/terminate events
     # This mimics the jq query:
@@ -2160,7 +2491,13 @@ def check_installation_status(cluster_id: str, infra_id: str = None) -> Tuple[st
     # Check resources.json for detailed failure info
     resources_data = load_json_file(f"{cluster_id}_resources.json")
     if not resources_data:
-        return ("WARNING", ["Could not load resources.json"])
+        # resources.json not required for ready clusters (only contains install-time data)
+        if state == 'ready':
+            return ("OK", [])
+        else:
+            # For error/installing clusters, resources.json is needed for failure analysis
+            print_status("WARNING", f"resources.json not found - needed for detailed failure analysis")
+            return ("WARNING", ["Could not load resources.json"])
 
     # Parse cluster_deployment for detailed conditions
     cluster_deployment_str = resources_data.get('resources', {}).get('cluster_deployment', '')
@@ -2269,8 +2606,9 @@ def check_installation_status(cluster_id: str, infra_id: str = None) -> Tuple[st
     if not bootstrap_found:
         print_status("WARNING", "No bootstrap instance found (may have been terminated)")
 
-    # If errors were detected, search CloudTrail for related events
-    if issues:
+    # Only search CloudTrail if we have installation errors AND specific resources to investigate
+    # (bootstrap instance or provision failure)
+    if issues and (bootstrap_instance_id or provision_failed):
         # Use infra_id for filtering
         if infra_id is None:
             infra_id = cluster_id.split('_')[0]
@@ -2300,6 +2638,7 @@ def check_installation_status(cluster_id: str, infra_id: str = None) -> Tuple[st
                                                         max_results=10)
         print_cloudtrail_correlation(related_events, "Installation Failure", cluster_id, infra_id)
 
+    if issues:
         return ("ERROR", issues)
     else:
         return ("OK", [])
@@ -2586,11 +2925,12 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
                           region: str, openshift_version: str, cluster_state: str,
                           results: Dict) -> str:
     """Write the markdown report to a file"""
-    global markdown_output
+    global markdown_output, source_directory
 
-    # Generate timestamp
+    # Generate timestamp and full path
     timestamp = int(time.time())
     filename = f"results_{timestamp}.md"
+    filepath = source_directory / filename
 
     # Build the complete markdown document
     full_markdown = []
@@ -2682,14 +3022,14 @@ def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     full_markdown.extend(wrapped_sections)
 
     # Write to file
-    with open(filename, 'w') as f:
+    with open(filepath, 'w') as f:
         f.write(''.join(full_markdown))
 
-    return filename
+    return str(filepath)
 
 def main():
     """Main health check function"""
-    global markdown_output, source_directory
+    global markdown_output, source_directory, cluster_state
     markdown_output = []  # Reset markdown output
 
     # Parse command-line arguments
@@ -2760,7 +3100,10 @@ Notes:
     cluster_uuid = cluster_data.get('id', cluster_id)
     region = cluster_data.get('region', {}).get('id', 'unknown')
     openshift_version = cluster_data.get('openshift_version', 'unknown')
-    cluster_state = cluster_data.get('state', 'unknown')
+    local_cluster_state = cluster_data.get('state', 'unknown')
+
+    # Set global cluster_state for use by check functions
+    cluster_state = local_cluster_state
 
     # Load cluster context data if available
     context_file = f"{cluster_id}_cluster_context.json"
@@ -2781,7 +3124,7 @@ Notes:
     print(f"{Colors.BOLD}Infra ID: {infra_id}{Colors.END}")
     print(f"{Colors.BOLD}Region: {region}{Colors.END}")
     print(f"{Colors.BOLD}OpenShift Version: {openshift_version}{Colors.END}")
-    print(f"{Colors.BOLD}State: {cluster_state}{Colors.END}")
+    print(f"{Colors.BOLD}State: {local_cluster_state}{Colors.END}")
     print(f"{Colors.BOLD}Network Type: {network_type}{Colors.END}")
     if jira_issues_count > 0:
         print(f"{Colors.BOLD}{Colors.YELLOW}Jira Issues: {jira_issues_count}{Colors.END}")
@@ -2837,7 +3180,7 @@ Notes:
     print(f"\n{Colors.BOLD}{Colors.BLUE}Generating markdown report...{Colors.END}")
     markdown_file = write_markdown_report(
         cluster_name, cluster_uuid, infra_id,
-        region, openshift_version, cluster_state,
+        region, openshift_version, local_cluster_state,
         results
     )
     print(f"{Colors.BOLD}{Colors.GREEN}✓ Markdown report written to: {markdown_file}{Colors.END}")
