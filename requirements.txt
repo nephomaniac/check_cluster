@@ -1,0 +1,5 @@
+# ROSA Cluster Artifacts Collection - Requirements
+# Install with: pip install -r requirements.txt
+# Or with uv: uv pip install -r requirements.txt
+
+boto3>=1.34.0

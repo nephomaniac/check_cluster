@@ -303,17 +303,26 @@ class AWSCollector:
         self.cloudwatch = session.client('cloudwatch', region_name=self.region, **client_kwargs)
         self.sts = session.client('sts', region_name=self.region, **client_kwargs)
 
-    def validate_credentials(self) -> bool:
+    def validate_credentials(self, cluster_data: Dict = None, cluster_id: str = None,
+                           show_header: bool = True) -> bool:
         """
-        Validate AWS credentials are present and not expired.
+        Validate AWS credentials are present, not expired, and match the cluster account.
+
+        Args:
+            cluster_data: Optional cluster data from OCM to validate account match
+            cluster_id: Optional cluster ID for better error messages
+            show_header: Whether to show the validation header
+
         Returns True if valid, False otherwise.
         """
-        Colors.hdr("Validating AWS Credentials")
+        if show_header:
+            Colors.hdr("Validating AWS Credentials")
 
         # Check if AWS credentials are configured
         if not os.environ.get('AWS_ACCESS_KEY_ID') and not os.environ.get('AWS_PROFILE'):
             Colors.perr("No AWS credentials found in environment")
-            Colors.perr("Please run: eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+            Colors.perr("Please run:")
+            self._print_credential_refresh_instructions()
             return False
 
         try:
@@ -327,15 +336,22 @@ class AWSCollector:
             arn = response.get('Arn', 'Unknown')
             user_id = response.get('UserId', 'Unknown')
 
-            Colors.green(f"✓ AWS credentials are valid")
-            if self.debug:
-                print(f"  Account: {account}")
-                print(f"  ARN: {arn}")
-                print(f"  User ID: {user_id}")
-            else:
-                print(f"  Account: {account}")
-                print(f"  ARN: {arn}")
-            print()
+            # Only show validation success if this is the initial check
+            if not cluster_data:
+                Colors.green(f"✓ AWS credentials are valid")
+                if self.debug:
+                    print(f"  Account: {account}")
+                    print(f"  ARN: {arn}")
+                    print(f"  User ID: {user_id}")
+                else:
+                    print(f"  Account: {account}")
+                    print(f"  ARN: {arn}")
+                print()
+
+            # If cluster data is provided, validate account matches
+            if cluster_data and account != 'Unknown':
+                if not self._validate_account_match(account, arn, cluster_data, cluster_id):
+                    return False
 
             return True
 
@@ -348,13 +364,13 @@ class AWSCollector:
                 Colors.perr(f"  Error: {error_msg}")
                 Colors.perr("")
                 Colors.perr("Please refresh your credentials:")
-                Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+                self._print_credential_refresh_instructions()
             elif error_code == 'InvalidClientTokenId':
                 Colors.perr("✗ AWS credentials are invalid")
                 Colors.perr(f"  Error: {error_msg}")
                 Colors.perr("")
                 Colors.perr("Please set valid credentials:")
-                Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+                self._print_credential_refresh_instructions()
             else:
                 Colors.perr(f"✗ Failed to validate AWS credentials: {error_code}")
                 Colors.perr(f"  Error: {error_msg}")
@@ -365,7 +381,7 @@ class AWSCollector:
             Colors.perr("✗ No AWS credentials configured")
             Colors.perr("")
             Colors.perr("Please set your AWS credentials:")
-            Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+            self._print_credential_refresh_instructions()
             return False
 
         except Exception as e:
@@ -389,6 +405,107 @@ class AWSCollector:
             return '\n'.join(details)
         except Exception:
             return "  Unable to retrieve caller identity"
+
+    @staticmethod
+    def _print_credential_refresh_instructions():
+        """Print standard instructions for refreshing AWS credentials"""
+        Colors.perr("  Set missing or expired AWS env vars:")
+        Colors.perr("  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_DEFAULT_REGION, AWS_REGION")
+        Colors.perr("  ocm backplane, and osdctl methods...")
+        Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+        Colors.perr("  ...or to use local rosa creds...")
+        Colors.perr("  ACCT_ID=\"$(osdctl account mgmt list -u ${OCM_USER_ID} -p ${ROSA_AWS_PROFILE} -o json | jq -r '.accounts[0]' 2>/dev/null )\"")
+        Colors.perr("  eval $(osdctl account cli -i ${ACCT_ID} -p ${ROSA_AWS_PROFILE} -r ${REGION} -o env)")
+
+    def _validate_account_match(self, sts_account: str, sts_arn: str,
+                                cluster_data: Dict, cluster_id: str = None) -> bool:
+        """
+        Validate that the STS caller account matches roles defined in cluster data.
+
+        Args:
+            sts_account: AWS account ID from STS get-caller-identity
+            sts_arn: ARN from STS get-caller-identity
+            cluster_data: Cluster data from OCM
+            cluster_id: Optional cluster ID for better error messages
+
+        Returns:
+            True if account matches or user chooses to continue, False otherwise
+        """
+        # Extract role ARNs from cluster data
+        aws_data = cluster_data.get('aws', {})
+        role_arns = []
+
+        # Collect all role ARNs from cluster data
+        if aws_data.get('sts', {}).get('support_role_arn'):
+            role_arns.append(aws_data['sts']['support_role_arn'])
+        if aws_data.get('sts', {}).get('role_arn'):
+            role_arns.append(aws_data['sts']['role_arn'])
+        if aws_data.get('sts', {}).get('instance_iam_roles', {}).get('master_role_arn'):
+            role_arns.append(aws_data['sts']['instance_iam_roles']['master_role_arn'])
+        if aws_data.get('sts', {}).get('instance_iam_roles', {}).get('worker_role_arn'):
+            role_arns.append(aws_data['sts']['instance_iam_roles']['worker_role_arn'])
+        if aws_data.get('sts', {}).get('operator_role_prefix'):
+            # Operator roles contain the account in their ARN
+            role_arns.append(f"arn:aws:iam::{sts_account}:role/{aws_data['sts']['operator_role_prefix']}")
+
+        # Check if STS account matches any role ARN account
+        account_found = False
+        matching_role = None
+
+        for role_arn in role_arns:
+            # Extract account from role ARN (format: arn:aws:iam::ACCOUNT:role/ROLE_NAME)
+            if f"::{sts_account}:" in role_arn:
+                account_found = True
+                matching_role = role_arn
+                break
+
+        if account_found:
+            Colors.green(f"✓ AWS account matches cluster account: {sts_account}")
+            if self.debug and matching_role:
+                print(f"  Matched role: {matching_role}")
+            return True
+
+        # Account mismatch - warn user
+        print()
+        Colors.perr("⚠ WARNING: AWS Account Mismatch Detected")
+        Colors.perr("")
+        Colors.perr(f"  Current STS identity account: {sts_account}")
+        Colors.perr(f"  Current STS ARN: {sts_arn}")
+        Colors.perr("")
+
+        if role_arns:
+            Colors.perr("  Expected cluster role ARNs:")
+            for role_arn in role_arns:
+                # Extract account from role ARN
+                if '::' in role_arn and ':role/' in role_arn:
+                    role_account = role_arn.split('::')[1].split(':')[0]
+                    Colors.perr(f"    - {role_arn} (account: {role_account})")
+                else:
+                    Colors.perr(f"    - {role_arn}")
+        else:
+            Colors.perr("  No role ARNs found in cluster data")
+
+        Colors.perr("")
+        Colors.perr(f"  The current AWS credentials may not be for cluster: {cluster_id or 'Unknown'}")
+        Colors.perr("")
+
+        # Prompt user to continue or abort
+        try:
+            response = input("  Do you want to continue anyway? [y/N]: ").strip().lower()
+            if response in ['y', 'yes']:
+                print()
+                Colors.blue("  Continuing with mismatched credentials...")
+                print()
+                return True
+            else:
+                print()
+                Colors.perr("  Aborting. Please set credentials for the correct cluster:")
+                self._print_credential_refresh_instructions()
+                return False
+        except (KeyboardInterrupt, EOFError):
+            print()
+            Colors.perr("\n  Aborted by user")
+            return False
 
     def _debug_credentials(self) -> str:
         """Debug credential configuration for troubleshooting"""
@@ -471,7 +588,7 @@ class AWSCollector:
                 Colors.perr("  3. If CLI works but boto3 fails, try:")
                 Colors.perr("     unset AWS_PROFILE  # boto3 may prefer profile over env vars")
                 Colors.perr("  4. Refresh credentials:")
-                Colors.perr("     eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+                self._print_credential_refresh_instructions()
 
                 self._shown_detailed_auth_error = True
             else:
@@ -714,15 +831,20 @@ class ClusterDataCollector:
 
     def run(self):
         """Main execution flow"""
-        # Validate AWS credentials first
+        # Initial credential validation (basic check)
         if not self.aws.validate_credentials():
             Colors.perr("\nAWS credential validation failed. Cannot proceed with data collection.")
-            Colors.perr(f"\nTo set credentials, run:")
-            Colors.perr(f"  eval $(ocm backplane cloud credentials {self.cluster_id} -o env)")
+            Colors.perr(f"\nRefresh AWS env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN.")
             sys.exit(1)
 
         # Get OCM cluster info
         self._get_ocm_cluster_info()
+
+        # Validate credentials against cluster account
+        if not self.aws.validate_credentials(cluster_data=self.cluster_data, cluster_id=self.cluster_id,
+                                            show_header=False):
+            Colors.perr("\nAWS credential account validation failed.")
+            sys.exit(1)
 
         # Determine time ranges
         self._determine_time_ranges()
