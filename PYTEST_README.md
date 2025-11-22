@@ -24,24 +24,29 @@ The project follows a clean separation of concerns:
 
 ```
 check_cluster/
-├── models/                     # Data models
-│   ├── cluster.py             # ClusterData model for all cluster information
-│   └── test_result.py         # Test result data models
-├── tests/                      # Pytest test modules
+├── models/                        # Data models
+│   ├── cluster.py                # ClusterData model for all cluster information
+│   └── test_result.py            # Test result data models
+├── tests/                         # Pytest test modules
 │   ├── test_security_groups.py   # Security group traffic validation (13 tests)
 │   ├── test_vpc.py               # VPC DNS and network configuration (6 tests)
+│   ├── test_network.py           # Network infrastructure validation (15 tests)
+│   ├── test_storage.py           # EBS volume validation (8 tests)
 │   ├── test_instances.py         # EC2 instance health checks (10 tests)
-│   ├── test_load_balancers.py    # Load balancer configuration (11 tests)
+│   ├── test_load_balancers.py    # Load balancer and listener config (22 tests)
+│   ├── test_vpc_endpoints.py     # VPC endpoint validation (6 tests)
+│   ├── test_iam.py               # IAM instance profile validation (5 tests)
+│   ├── test_autoscaling.py       # Auto Scaling Group validation (8 tests)
 │   ├── test_route53.py           # Route53 DNS validation (5 tests)
 │   ├── test_cloudtrail.py        # CloudTrail event analysis (6 tests)
 │   └── test_installation.py      # Cluster installation status (12 tests)
-├── reporters/                  # Report generation
-│   └── html_generator.py      # HTMLReportGenerator class
-├── utils/                      # Utility functions
-│   └── data_loader.py         # Load cluster JSON files
-├── conftest.py                 # Pytest fixtures and configuration
-├── run_tests.py                # Main entry point
-└── requirements.txt            # Python dependencies
+├── reporters/                     # Report generation
+│   └── html_generator.py         # HTMLReportGenerator class
+├── utils/                         # Utility functions
+│   └── data_loader.py            # Load cluster JSON files
+├── conftest.py                    # Pytest fixtures and configuration
+├── run_tests.py                   # Main entry point
+└── requirements.txt               # Python dependencies
 ```
 
 ## Features
@@ -72,28 +77,75 @@ check_cluster/
    - Validates cluster ownership tags
    - Verifies IAM instance profiles
 
-4. **Load Balancers** (`test_load_balancers.py`) - 11 tests
+4. **Network Infrastructure** (`test_network.py`) - 15 tests
+   - Validates subnets (public/private configuration)
+   - Checks subnet Kubernetes role tags
+   - Verifies Internet Gateway existence and attachment
+   - Validates NAT Gateway availability and public IPs
+   - Checks Elastic IP allocation for NAT gateways
+   - Verifies route table configuration (IGW for public, NAT for private)
+   - Validates Network ACLs (informational)
+   - Checks VPC Flow Logs (optional)
+
+5. **Storage** (`test_storage.py`) - 8 tests
+   - Validates EBS volumes exist and are in valid states
+   - Checks EBS encryption (security compliance)
+   - Verifies master node etcd volumes
+   - Validates volume attachments are in 'attached' state
+   - Checks volume types are supported (gp2, gp3, io1, io2)
+   - Validates volume/instance AZ alignment
+   - Checks for volumes stuck in deleting state
+
+6. **Load Balancers** (`test_load_balancers.py`) - 22 tests
    - Validates API load balancer existence and health
    - Checks load balancer scheme (public/private)
-   - Verifies listener configuration (ports 6443, 22623)
-   - Validates multi-AZ deployment
-   - Checks security group attachments
+   - Verifies listener configuration for NLBs
+   - Validates listeners on ports 6443 (API) and 22623 (MCS)
+   - Checks listener default actions
+   - Validates target groups and target health
+   - Verifies health check paths (/readyz for API, /healthz for MCS)
+   - Checks multi-AZ deployment
+   - Validates security group attachments
    - Verifies DNS name configuration
 
-5. **Route53 DNS** (`test_route53.py`) - 5 tests
+7. **VPC Endpoints** (`test_vpc_endpoints.py`) - 6 tests
+   - Validates VPC endpoint existence (optional)
+   - Checks endpoint state (available/pending)
+   - Verifies service name configuration
+   - Validates interface endpoints have security groups
+   - Checks interface endpoints are deployed in subnets
+   - Verifies S3 gateway endpoint (informational)
+
+8. **IAM Instance Profiles** (`test_iam.py`) - 5 tests
+   - Validates IAM instance profiles exist for cluster nodes
+   - Checks master/control plane node profiles
+   - Verifies worker node profiles
+   - Validates profiles have roles attached
+   - Checks profile ARNs are valid
+
+9. **Auto Scaling Groups** (`test_autoscaling.py`) - 8 tests
+   - Validates Auto Scaling Groups exist (optional)
+   - Checks desired capacity configuration
+   - Verifies min/max capacity settings
+   - Validates health check configuration
+   - Checks multi-AZ deployment for ASGs
+   - Verifies launch template/configuration
+   - Validates ASG tagging
+
+10. **Route53 DNS** (`test_route53.py`) - 5 tests
    - Validates hosted zone existence
    - Checks private zone configuration for private clusters
    - Verifies API DNS record
    - Validates name server configuration
    - Checks cluster domain configuration
 
-6. **CloudTrail Events** (`test_cloudtrail.py`) - 6 tests
+11. **CloudTrail Events** (`test_cloudtrail.py`) - 6 tests
    - Analyzes security group modification events
    - Detects security group rule revocations
    - Checks for excessive API errors
    - Validates event timestamps and user identity
 
-7. **Installation Status** (`test_installation.py`) - 12 tests
+12. **Installation Status** (`test_installation.py`) - 12 tests
    - Validates cluster ID and infrastructure ID
    - Checks cluster state (ready/installed/active)
    - Verifies OpenShift version
@@ -231,7 +283,22 @@ This tool expects cluster data to be collected using the companion `get_install_
 - `<cluster-id>_cluster.json` - Core cluster configuration
 - `<cluster-id>_security_groups.json` - Security group rules
 - `<cluster-id>_ec2_instances.json` - EC2 instance data
+- `<cluster-id>_ebs_volumes.json` - EBS volume data
+- `<cluster-id>_subnets.json` - Subnet configuration
+- `<cluster-id>_route_tables.json` - Route table configuration
+- `<cluster-id>_internet_gateways.json` - Internet gateway configuration
+- `<cluster-id>_nat_gateways.json` - NAT gateway configuration
+- `<cluster-id>_elastic_ips.json` - Elastic IP addresses
+- `<cluster-id>_network_acls.json` - Network ACLs (optional)
 - `<cluster-id>_load_balancers_all.json` - Load balancer configuration
+- `<cluster-id>_<lb-name>_listeners.json` - Load balancer listeners
+- `<cluster-id>_target_groups.json` - Target group configuration
+- `<cluster-id>_*_target_health.json` - Target health status
+- `<cluster-id>_vpc_endpoints.json` - VPC endpoints (optional)
+- `<cluster-id>_iam_instance_profiles.json` - IAM instance profiles (optional)
+- `<cluster-id>_autoscaling_groups.json` - Auto Scaling Groups (optional)
+- `<cluster-id>_launch_templates.json` - Launch templates (optional)
+- `<cluster-id>_kms_keys.json` - KMS encryption keys (optional)
 - `<cluster-id>_VPC_IDS.json` - VPC configuration
 - `<cluster-id>_hosted_zones.json` - Route53 zones (optional)
 - `<cluster-id>_*.cloudtrail.json` - CloudTrail events (optional)
@@ -367,7 +434,7 @@ This pytest-based architecture replaces the monolithic `check_cluster_artifacts.
 
 - No backward compatibility with old script format
 - Same validation logic, cleaner implementation
-- Test coverage expanded (63 total tests vs ~40 checks)
+- Test coverage expanded (116 total tests vs ~40 checks)
 - Better error messages with specific file/line references
 - HTML report more interactive than previous version
 
@@ -471,6 +538,27 @@ fi
 - Use helper functions for complex logic
 
 ## Version History
+
+### v2.1.0 (2025-11-22) - Expanded Resource Collection
+
+- Added 53 new tests across 5 new test modules
+- Expanded test coverage (12 categories, 116 tests total)
+- New resource collection:
+  - Load balancer listeners (NLB/ALB)
+  - VPC endpoints
+  - IAM instance profiles
+  - Auto Scaling Groups
+  - Launch Templates
+  - KMS keys
+- New test modules:
+  - test_network.py (15 tests) - Network infrastructure validation
+  - test_storage.py (8 tests) - EBS volume validation
+  - test_vpc_endpoints.py (6 tests) - VPC endpoint validation
+  - test_iam.py (5 tests) - IAM instance profile validation
+  - test_autoscaling.py (8 tests) - Auto Scaling Group validation
+- Enhanced test_load_balancers.py with listener validation (11 new tests)
+- Improved multi-AZ cluster support
+- Better handling of optional AWS resources
 
 ### v2.0.0 (2025-11-21) - Pytest Architecture
 

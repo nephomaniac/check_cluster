@@ -84,6 +84,12 @@ def pytest_configure(config):
         "markers", "vpc: VPC configuration tests"
     )
     config.addinivalue_line(
+        "markers", "network: Network infrastructure tests (subnets, NAT, IGW, routing)"
+    )
+    config.addinivalue_line(
+        "markers", "storage: Storage infrastructure tests (EBS volumes)"
+    )
+    config.addinivalue_line(
         "markers", "instances: EC2 instance tests"
     )
     config.addinivalue_line(

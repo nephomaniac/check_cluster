@@ -146,7 +146,8 @@ Automated data collection script using boto3 for AWS API calls. Gathers comprehe
 - **VPC Flow Logs**
 
 **Load Balancers:**
-- **Application Load Balancers (ALBv2)** with tags
+- **Application/Network Load Balancers (ALBv2/NLB)** with tags
+- **Load Balancer Listeners** (port configuration and default actions)
 - **Classic Load Balancers (ELB)**
 - **Target Groups** (backend configuration)
 - **Target Health** (per target group health checks)
@@ -155,6 +156,13 @@ Automated data collection script using boto3 for AWS API calls. Gathers comprehe
 - **EBS Volumes** (overall and per-zone for multi-AZ)
 - **Route53 Hosted Zones** (private and public)
 - **Route53 Record Sets** (API and apps DNS)
+
+**Additional Infrastructure:**
+- **VPC Endpoints** (service endpoint configuration)
+- **IAM Instance Profiles** (EC2 instance roles)
+- **Auto Scaling Groups** (worker node scaling configuration)
+- **Launch Templates** (instance launch specifications)
+- **KMS Keys** (encryption key information)
 
 **Multi-AZ Support:**
 - When `multi_az=true`, collects zone-specific artifacts for each availability zone

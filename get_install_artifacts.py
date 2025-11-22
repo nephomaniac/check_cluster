@@ -869,6 +869,18 @@ class AWSCollector:
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'describe target health')
 
+    def describe_listeners(self, load_balancer_arn: str = None) -> Dict:
+        """Describe load balancer listeners"""
+        params = {}
+        if load_balancer_arn:
+            params['LoadBalancerArn'] = load_balancer_arn
+
+        print(format_aws_cli_command('elbv2', 'describe-listeners', params))
+        try:
+            return self.elbv2.describe_listeners(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe listeners')
+
     def describe_classic_load_balancers(self, load_balancer_names: List[str] = None) -> Dict:
         """Describe classic load balancers"""
         params = {}
@@ -953,6 +965,61 @@ class AWSCollector:
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'describe VPC flow logs')
 
+    def describe_vpc_endpoints(self, filters: List[Dict] = None) -> Dict:
+        """Describe VPC endpoints"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-vpc-endpoints', params))
+        try:
+            return self.ec2.describe_vpc_endpoints(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPC endpoints')
+
+    def describe_iam_instance_profiles(self) -> Dict:
+        """Describe IAM instance profiles"""
+        print("aws iam list-instance-profiles --output json")
+        try:
+            import boto3
+            iam = boto3.client('iam')
+            return iam.list_instance_profiles()
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'list IAM instance profiles')
+
+    def describe_autoscaling_groups(self, filters: List[Dict] = None) -> Dict:
+        """Describe Auto Scaling Groups"""
+        params = {}
+        print("aws autoscaling describe-auto-scaling-groups --output json")
+        try:
+            import boto3
+            autoscaling = boto3.client('autoscaling', region_name=self.region)
+            return autoscaling.describe_auto_scaling_groups(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe Auto Scaling Groups')
+
+    def describe_launch_templates(self, filters: List[Dict] = None) -> Dict:
+        """Describe Launch Templates"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-launch-templates', params))
+        try:
+            return self.ec2.describe_launch_templates(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe launch templates')
+
+    def list_kms_keys(self) -> Dict:
+        """List KMS keys"""
+        print("aws kms list-keys --output json")
+        try:
+            import boto3
+            kms = boto3.client('kms', region_name=self.region)
+            return kms.list_keys()
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'list KMS keys')
+
 
 class ClusterDataCollector:
     """Main collector class for ROSA cluster artifacts"""
@@ -1008,6 +1075,7 @@ class ClusterDataCollector:
         # Get AWS resources
         self._get_vpc_info()
         self._get_network_infrastructure()
+        self._get_additional_infrastructure()
         self._get_vpc_endpoint_service_info()
         self._get_ec2_instance_info()
         self._get_cloud_trail_logs()
@@ -1583,6 +1651,95 @@ class ClusterDataCollector:
             Colors.hdr(f"Collecting zone-specific artifacts for multi-AZ cluster ({len(self.availability_zones)} zones)")
             self._collect_zone_specific_artifacts()
 
+    def _get_additional_infrastructure(self):
+        """Fetch additional infrastructure resources"""
+        Colors.hdr("Getting additional infrastructure resources")
+
+        # VPC Endpoints
+        vpc_endpoints_file = f"{self.file_prefix}_vpc_endpoints.json"
+        if Path(vpc_endpoints_file).exists():
+            Colors.green(f"Using existing VPC endpoints file: {vpc_endpoints_file}")
+        else:
+            Colors.blue("Fetching VPC endpoints from AWS...")
+            try:
+                response = self.aws.describe_vpc_endpoints(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(vpc_endpoints_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch VPC endpoints: {str(e)}")
+
+        # IAM Instance Profiles
+        iam_profiles_file = f"{self.file_prefix}_iam_instance_profiles.json"
+        if Path(iam_profiles_file).exists():
+            Colors.green(f"Using existing IAM instance profiles file: {iam_profiles_file}")
+        else:
+            Colors.blue("Fetching IAM instance profiles from AWS...")
+            try:
+                response = self.aws.describe_iam_instance_profiles()
+                # Filter to cluster profiles
+                cluster_profiles = []
+                for profile in response.get('InstanceProfiles', []):
+                    if self.infra_id in profile.get('InstanceProfileName', ''):
+                        cluster_profiles.append(profile)
+
+                with open(iam_profiles_file, 'w') as f:
+                    json.dump({'InstanceProfiles': cluster_profiles}, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch IAM instance profiles: {str(e)}")
+
+        # Auto Scaling Groups
+        asg_file = f"{self.file_prefix}_autoscaling_groups.json"
+        if Path(asg_file).exists():
+            Colors.green(f"Using existing Auto Scaling Groups file: {asg_file}")
+        else:
+            Colors.blue("Fetching Auto Scaling Groups from AWS...")
+            try:
+                response = self.aws.describe_autoscaling_groups()
+                # Filter to cluster ASGs
+                cluster_asgs = []
+                for asg in response.get('AutoScalingGroups', []):
+                    asg_name = asg.get('AutoScalingGroupName', '')
+                    # Check tags for infra_id
+                    for tag in asg.get('Tags', []):
+                        if tag.get('Key') == 'Name' and self.infra_id in tag.get('Value', ''):
+                            cluster_asgs.append(asg)
+                            break
+
+                with open(asg_file, 'w') as f:
+                    json.dump({'AutoScalingGroups': cluster_asgs}, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch Auto Scaling Groups: {str(e)}")
+
+        # Launch Templates
+        launch_templates_file = f"{self.file_prefix}_launch_templates.json"
+        if Path(launch_templates_file).exists():
+            Colors.green(f"Using existing launch templates file: {launch_templates_file}")
+        else:
+            Colors.blue("Fetching launch templates from AWS...")
+            try:
+                response = self.aws.describe_launch_templates(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(launch_templates_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch launch templates: {str(e)}")
+
+        # KMS Keys
+        kms_keys_file = f"{self.file_prefix}_kms_keys.json"
+        if Path(kms_keys_file).exists():
+            Colors.green(f"Using existing KMS keys file: {kms_keys_file}")
+        else:
+            Colors.blue("Fetching KMS keys from AWS...")
+            try:
+                response = self.aws.list_kms_keys()
+                with open(kms_keys_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch KMS keys: {str(e)}")
+
     def _collect_zone_specific_artifacts(self):
         """Collect zone-specific artifacts for multi-AZ clusters"""
         for zone in self.availability_zones:
@@ -2041,6 +2198,32 @@ Iterating over LBs found in {lb_all_file} to get tag associations...
                     json.dump(response, f, indent=2, default=str)
             except Exception as e:
                 Colors.perr(f"Failed to fetch classic load balancers: {str(e)}")
+
+        # Get Listeners for ELBv2 Load Balancers
+        if Path(lb_all_file).exists():
+            Colors.blue("Fetching listeners for load balancers...")
+            with open(lb_all_file) as f:
+                lb_data = json.load(f)
+
+            for lb in lb_data.get('LoadBalancers', []):
+                lb_arn = lb.get('LoadBalancerArn')
+                lb_name = lb.get('LoadBalancerName', 'unknown')
+
+                # Check if LB belongs to cluster
+                if self.infra_id not in lb_name:
+                    continue
+
+                listeners_file = f"{self.file_prefix}_{lb_name}_listeners.json"
+                if Path(listeners_file).exists():
+                    Colors.green(f"Using existing listeners file: {listeners_file}")
+                else:
+                    Colors.blue(f"Fetching listeners for: {lb_name}")
+                    try:
+                        response = self.aws.describe_listeners(lb_arn)
+                        with open(listeners_file, 'w') as f:
+                            json.dump(response, f, indent=2, default=str)
+                    except Exception as e:
+                        Colors.perr(f"Failed to fetch listeners for {lb_name}: {str(e)}")
 
     def _write_runtime_config(self):
         """Write runtime configuration to last_run.json"""
