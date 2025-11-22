@@ -56,7 +56,10 @@ class Colors:
     @staticmethod
     def hdr(msg: str):
         """Print header with lines"""
-        width = min(80, os.get_terminal_size().columns if hasattr(os, 'get_terminal_size') else 80)
+        try:
+            width = min(80, os.get_terminal_size().columns)
+        except (OSError, AttributeError):
+            width = 80
         print()
         print('-' * width)
         Colors.blue(msg)
@@ -66,7 +69,10 @@ class Colors:
 def printline(char: str = '-', width: Optional[int] = None):
     """Print a line of characters"""
     if width is None:
-        width = min(80, os.get_terminal_size().columns if hasattr(os, 'get_terminal_size') else 80)
+        try:
+            width = min(80, os.get_terminal_size().columns)
+        except (OSError, AttributeError):
+            width = 80
     print(char * width)
 
 
@@ -95,7 +101,7 @@ def parse_elapsed_time(elapsed_str: str) -> Tuple[int, str]:
 
 
 def format_aws_cli_command(service: str, operation: str, params: Dict[str, Any]) -> str:
-    """Format boto3 call as AWS CLI equivalent command"""
+    """Format boto3 call as AWS CLI equivalent command with proper quoting"""
     cmd_parts = [f"aws {service} {operation}"]
 
     for key, value in params.items():
@@ -104,21 +110,45 @@ def format_aws_cli_command(service: str, operation: str, params: Dict[str, Any])
 
         if isinstance(value, list):
             if all(isinstance(item, dict) for item in value):
-                # Complex list like Dimensions
+                # Complex list like Filters or Dimensions
+                # Example: --filters "Name=tag:Name,Values=*infra-id*"
+                filter_parts = []
                 for item in value:
-                    item_str = ','.join([f"{k}={v}" for k, v in item.items()])
-                    cmd_parts.append(f"--{cli_key} {item_str}")
+                    # Format each dict as key=value pairs
+                    parts = []
+                    for k, v in item.items():
+                        if isinstance(v, list):
+                            # For list values like Values=[...], join them
+                            v_str = ','.join(str(x) for x in v)
+                            parts.append(f"{k}={v_str}")
+                        else:
+                            parts.append(f"{k}={v}")
+                    filter_parts.append(','.join(parts))
+                # Join multiple filter dicts with space and quote the whole thing
+                filters_str = ' '.join(filter_parts)
+                cmd_parts.append(f'--{cli_key} "{filters_str}"')
             else:
-                # Simple list
-                cmd_parts.append(f"--{cli_key} {' '.join(str(v) for v in value)}")
+                # Simple list of strings/values - quote if contains spaces or special chars
+                list_str = ' '.join(str(v) for v in value)
+                if ' ' in list_str or any(c in list_str for c in ['*', '?', '[', ']', '(', ')']):
+                    cmd_parts.append(f'--{cli_key} "{list_str}"')
+                else:
+                    cmd_parts.append(f"--{cli_key} {list_str}")
         elif isinstance(value, dict):
-            # JSON format
-            json_str = json.dumps(value).replace('"', '\\"')
-            cmd_parts.append(f'--{cli_key} "{json_str}"')
+            # JSON format - use single quotes to avoid escaping internal double quotes
+            json_str = json.dumps(value)
+            cmd_parts.append(f"--{cli_key} '{json_str}'")
         elif isinstance(value, bool):
             if value:
                 cmd_parts.append(f"--{cli_key}")
+        elif isinstance(value, str):
+            # Quote strings if they contain spaces, wildcards, or special characters
+            if ' ' in value or any(c in value for c in ['*', '?', '[', ']', '(', ')', '$', '&', '|', ';']):
+                cmd_parts.append(f'--{cli_key} "{value}"')
+            else:
+                cmd_parts.append(f"--{cli_key} {value}")
         else:
+            # Numbers and other types don't need quoting
             cmd_parts.append(f"--{cli_key} {value}")
 
     cmd_parts.append("--output json")
@@ -128,14 +158,15 @@ def format_aws_cli_command(service: str, operation: str, params: Dict[str, Any])
 class AWSCollector:
     """AWS data collection with retry logic and CLI command printing"""
 
-    def __init__(self, region: str = None, max_retries: int = 3, retry_delay: int = 1):
+    def __init__(self, region: str = None, max_retries: int = 3, retry_delay: int = 1, debug: bool = False):
         # Import boto3 here so help can be displayed without it
         try:
             import boto3
-            from botocore.exceptions import ClientError, BotoCoreError
+            from botocore.exceptions import ClientError, BotoCoreError, NoCredentialsError
             self.boto3 = boto3
             self.ClientError = ClientError
             self.BotoCoreError = BotoCoreError
+            self.NoCredentialsError = NoCredentialsError
         except ImportError:
             Colors.perr("Error: boto3 is not installed. Please install it with: pip install boto3")
             sys.exit(1)
@@ -143,13 +174,323 @@ class AWSCollector:
         self.region = region or os.environ.get('AWS_REGION', 'us-east-1')
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.debug = debug
 
-        # Initialize boto3 clients
-        self.ec2 = boto3.client('ec2', region_name=self.region)
-        self.elbv2 = boto3.client('elbv2', region_name=self.region)
-        self.route53 = boto3.client('route53')
-        self.cloudtrail = boto3.client('cloudtrail', region_name=self.region)
-        self.cloudwatch = boto3.client('cloudwatch', region_name=self.region)
+        # Track if we've already shown detailed UnauthorizedOperation error
+        self._shown_detailed_auth_error = False
+
+        # Initialize boto3 session from environment variables explicitly
+        # This ensures boto3 uses the same credentials as AWS CLI
+        session_params = {}
+        if os.environ.get('AWS_ACCESS_KEY_ID'):
+            session_params['aws_access_key_id'] = os.environ.get('AWS_ACCESS_KEY_ID')
+        if os.environ.get('AWS_SECRET_ACCESS_KEY'):
+            session_params['aws_secret_access_key'] = os.environ.get('AWS_SECRET_ACCESS_KEY')
+        if os.environ.get('AWS_SESSION_TOKEN'):
+            session_params['aws_session_token'] = os.environ.get('AWS_SESSION_TOKEN')
+        if self.region:
+            session_params['region_name'] = self.region
+
+        # Create session with explicit credentials
+        if session_params:
+            session = boto3.Session(**session_params)
+        else:
+            session = boto3.Session(region_name=self.region)
+
+        # Configure proxy settings from environment or AWS config
+        # boto3 automatically uses HTTP_PROXY, HTTPS_PROXY, NO_PROXY env vars
+        client_config = None
+
+        # Check for proxy in environment variables (same as AWS CLI uses)
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        no_proxy = os.environ.get('NO_PROXY') or os.environ.get('no_proxy')
+        ca_bundle = os.environ.get('AWS_CA_BUNDLE')
+
+        # Also check AWS CLI config file for proxy and ca_bundle settings
+        aws_config_file = os.path.expanduser('~/.aws/config')
+        if os.path.exists(aws_config_file):
+            try:
+                import configparser
+                config = configparser.ConfigParser()
+                config.read(aws_config_file)
+
+                # Determine which profile to use
+                profile = os.environ.get('AWS_PROFILE')
+
+                # Try specified profile first, then fall back to default
+                sections_to_try = []
+                if profile:
+                    # If profile specified, try "profile {name}" format
+                    sections_to_try.append(f'profile {profile}')
+                    sections_to_try.append(profile)  # Some configs use just the name
+
+                # Always fall back to default section
+                sections_to_try.append('default')
+
+                for section in sections_to_try:
+                    if config.has_section(section):
+                        # Read ca_bundle if not already set
+                        if not ca_bundle and config.has_option(section, 'ca_bundle'):
+                            ca_bundle = config.get(section, 'ca_bundle').strip('"').strip("'")
+                            if self.debug:
+                                print(f"Read ca_bundle from [{section}]: {ca_bundle}")
+
+                        # Read proxy settings from config if not in environment
+                        if not https_proxy and config.has_option(section, 'https_proxy'):
+                            https_proxy = config.get(section, 'https_proxy').strip('"').strip("'")
+                            if self.debug:
+                                print(f"Read https_proxy from [{section}]: {https_proxy}")
+
+                        if not http_proxy and config.has_option(section, 'http_proxy'):
+                            http_proxy = config.get(section, 'http_proxy').strip('"').strip("'")
+                            if self.debug:
+                                print(f"Read http_proxy from [{section}]: {http_proxy}")
+
+                        if not no_proxy and config.has_option(section, 'no_proxy'):
+                            no_proxy = config.get(section, 'no_proxy').strip('"').strip("'")
+                            if self.debug:
+                                print(f"Read no_proxy from [{section}]: {no_proxy}")
+
+                        # If we found values, stop looking
+                        if https_proxy or http_proxy or ca_bundle:
+                            break
+            except Exception as e:
+                if self.debug:
+                    print(f"Warning: Failed to read AWS config file: {str(e)}")
+
+        if https_proxy or http_proxy:
+            # boto3 Config object for proxy and SSL settings
+            from botocore.config import Config
+
+            config_params = {}
+
+            proxy_config = {}
+            if https_proxy:
+                proxy_config['https'] = https_proxy
+            if http_proxy:
+                proxy_config['http'] = http_proxy
+
+            config_params['proxies'] = proxy_config
+            config_params['proxies_config'] = {'proxy_use_forwarding_for_https': True}
+
+            client_config = Config(**config_params)
+
+            if self.debug:
+                print("Proxy configuration detected:")
+                if https_proxy:
+                    print(f"  HTTPS proxy: {https_proxy}")
+                if http_proxy:
+                    print(f"  HTTP proxy: {http_proxy}")
+                if no_proxy:
+                    print(f"  NO_PROXY: {no_proxy}")
+
+        if ca_bundle and self.debug:
+            print(f"  CA bundle: {ca_bundle}")
+
+        # Initialize boto3 clients from session with proxy config
+        # Add verify parameter for CA bundle if specified
+        client_kwargs = {}
+        if client_config is not None:
+            client_kwargs['config'] = client_config
+        if ca_bundle:
+            client_kwargs['verify'] = ca_bundle
+
+        self.ec2 = session.client('ec2', region_name=self.region, **client_kwargs)
+        self.elbv2 = session.client('elbv2', region_name=self.region, **client_kwargs)
+        self.route53 = session.client('route53', **client_kwargs)
+        self.cloudtrail = session.client('cloudtrail', region_name=self.region, **client_kwargs)
+        self.cloudwatch = session.client('cloudwatch', region_name=self.region, **client_kwargs)
+        self.sts = session.client('sts', region_name=self.region, **client_kwargs)
+
+    def validate_credentials(self) -> bool:
+        """
+        Validate AWS credentials are present and not expired.
+        Returns True if valid, False otherwise.
+        """
+        Colors.hdr("Validating AWS Credentials")
+
+        # Check if AWS credentials are configured
+        if not os.environ.get('AWS_ACCESS_KEY_ID') and not os.environ.get('AWS_PROFILE'):
+            Colors.perr("No AWS credentials found in environment")
+            Colors.perr("Please run: eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+            return False
+
+        try:
+            # Call STS get-caller-identity to validate credentials
+            if self.debug:
+                print("aws sts get-caller-identity --output json")
+            response = self.sts.get_caller_identity()
+
+            # Display credential information
+            account = response.get('Account', 'Unknown')
+            arn = response.get('Arn', 'Unknown')
+            user_id = response.get('UserId', 'Unknown')
+
+            Colors.green(f"✓ AWS credentials are valid")
+            if self.debug:
+                print(f"  Account: {account}")
+                print(f"  ARN: {arn}")
+                print(f"  User ID: {user_id}")
+            else:
+                print(f"  Account: {account}")
+                print(f"  ARN: {arn}")
+            print()
+
+            return True
+
+        except self.ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_msg = e.response.get('Error', {}).get('Message', str(e))
+
+            if error_code == 'ExpiredToken':
+                Colors.perr("✗ AWS credentials have expired")
+                Colors.perr(f"  Error: {error_msg}")
+                Colors.perr("")
+                Colors.perr("Please refresh your credentials:")
+                Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+            elif error_code == 'InvalidClientTokenId':
+                Colors.perr("✗ AWS credentials are invalid")
+                Colors.perr(f"  Error: {error_msg}")
+                Colors.perr("")
+                Colors.perr("Please set valid credentials:")
+                Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+            else:
+                Colors.perr(f"✗ Failed to validate AWS credentials: {error_code}")
+                Colors.perr(f"  Error: {error_msg}")
+
+            return False
+
+        except self.NoCredentialsError:
+            Colors.perr("✗ No AWS credentials configured")
+            Colors.perr("")
+            Colors.perr("Please set your AWS credentials:")
+            Colors.perr("  eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+            return False
+
+        except Exception as e:
+            Colors.perr(f"✗ Unexpected error validating credentials: {str(e)}")
+            return False
+
+    def _get_caller_identity_details(self) -> str:
+        """Get caller identity details for troubleshooting permission errors"""
+        try:
+            response = self.sts.get_caller_identity()
+            account = response.get('Account', 'Unknown')
+            arn = response.get('Arn', 'Unknown')
+            user_id = response.get('UserId', 'Unknown')
+
+            details = [
+                "Current AWS Identity:",
+                f"  Account: {account}",
+                f"  ARN: {arn}",
+                f"  User ID: {user_id}"
+            ]
+            return '\n'.join(details)
+        except Exception:
+            return "  Unable to retrieve caller identity"
+
+    def _debug_credentials(self) -> str:
+        """Debug credential configuration for troubleshooting"""
+        debug_info = ["Credential Debug Information:"]
+
+        # Check environment variables
+        if os.environ.get('AWS_ACCESS_KEY_ID'):
+            key_id = os.environ.get('AWS_ACCESS_KEY_ID')
+            debug_info.append(f"  AWS_ACCESS_KEY_ID: {key_id[:8]}...{key_id[-4:] if len(key_id) > 12 else ''}")
+        else:
+            debug_info.append("  AWS_ACCESS_KEY_ID: Not set")
+
+        if os.environ.get('AWS_SECRET_ACCESS_KEY'):
+            debug_info.append("  AWS_SECRET_ACCESS_KEY: Set (hidden)")
+        else:
+            debug_info.append("  AWS_SECRET_ACCESS_KEY: Not set")
+
+        if os.environ.get('AWS_SESSION_TOKEN'):
+            token = os.environ.get('AWS_SESSION_TOKEN')
+            debug_info.append(f"  AWS_SESSION_TOKEN: {token[:8]}...{token[-4:] if len(token) > 12 else ''}")
+        else:
+            debug_info.append("  AWS_SESSION_TOKEN: Not set")
+
+        debug_info.append(f"  AWS_REGION: {os.environ.get('AWS_REGION', 'Not set (using default)')}")
+        debug_info.append(f"  AWS_DEFAULT_REGION: {os.environ.get('AWS_DEFAULT_REGION', 'Not set')}")
+
+        if os.environ.get('AWS_PROFILE'):
+            debug_info.append(f"  AWS_PROFILE: {os.environ.get('AWS_PROFILE')}")
+
+        # Check proxy settings
+        https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+        http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+        no_proxy = os.environ.get('NO_PROXY') or os.environ.get('no_proxy')
+        ca_bundle = os.environ.get('AWS_CA_BUNDLE')
+
+        debug_info.append("")
+        debug_info.append("Proxy Configuration:")
+        if https_proxy:
+            debug_info.append(f"  HTTPS_PROXY: {https_proxy}")
+        else:
+            debug_info.append("  HTTPS_PROXY: Not set")
+
+        if http_proxy:
+            debug_info.append(f"  HTTP_PROXY: {http_proxy}")
+        else:
+            debug_info.append("  HTTP_PROXY: Not set")
+
+        if no_proxy:
+            debug_info.append(f"  NO_PROXY: {no_proxy}")
+
+        if ca_bundle:
+            debug_info.append(f"  AWS_CA_BUNDLE: {ca_bundle}")
+
+        return '\n'.join(debug_info)
+
+    def _handle_aws_error(self, e: Exception, operation: str):
+        """Handle AWS errors and display caller identity for UnauthorizedOperation"""
+        error_code = None
+        if hasattr(e, 'response') and isinstance(e.response, dict):
+            error_code = e.response.get('Error', {}).get('Code', None)
+
+        if error_code == 'UnauthorizedOperation':
+            if not self._shown_detailed_auth_error:
+                # Show detailed error first time only
+                Colors.perr(f"✗ UnauthorizedOperation: {operation}")
+                Colors.perr(f"  Error: {str(e)}")
+                Colors.perr("")
+                Colors.perr(self._get_caller_identity_details())
+                Colors.perr("")
+                Colors.perr(self._debug_credentials())
+                Colors.perr("")
+                Colors.perr("This IAM principal lacks the required permissions.")
+                Colors.perr("")
+                Colors.perr("TROUBLESHOOTING:")
+                Colors.perr("  1. Verify AWS CLI works with same credentials:")
+                Colors.perr("     aws sts get-caller-identity")
+                Colors.perr("  2. Check proxy configuration (if behind corporate proxy):")
+                Colors.perr("     cat ~/.aws/config  # Look for proxy and ca_bundle settings")
+                Colors.perr("     echo $HTTPS_PROXY $HTTP_PROXY $AWS_CA_BUNDLE")
+                Colors.perr("  3. If CLI works but boto3 fails, try:")
+                Colors.perr("     unset AWS_PROFILE  # boto3 may prefer profile over env vars")
+                Colors.perr("  4. Refresh credentials:")
+                Colors.perr("     eval $(ocm backplane cloud credentials <cluster-id> -o env)")
+
+                self._shown_detailed_auth_error = True
+            else:
+                # Brief error for subsequent occurrences
+                Colors.perr(f"✗ UnauthorizedOperation: {operation} (see earlier error for details)")
+        elif error_code and 'unauthorized' in error_code.lower():
+            if not self._shown_detailed_auth_error:
+                Colors.perr(f"✗ Authorization error during {operation}")
+                Colors.perr(f"  Error: {str(e)}")
+                Colors.perr("")
+                Colors.perr(self._get_caller_identity_details())
+                Colors.perr("")
+                Colors.perr(self._debug_credentials())
+
+                self._shown_detailed_auth_error = True
+            else:
+                Colors.perr(f"✗ Authorization error during {operation} (see earlier error for details)")
+
+        raise
 
     def _retry_request(self, func, service: str, operation: str, params: Dict, description: str):
         """Execute AWS request with retry logic"""
@@ -158,6 +499,15 @@ class AWSCollector:
                 result = func(**params)
                 return result
             except (self.ClientError, self.BotoCoreError) as e:
+                error_code = None
+                if hasattr(e, 'response') and isinstance(e.response, dict):
+                    error_code = e.response.get('Error', {}).get('Code', None)
+
+                # Handle UnauthorizedOperation errors - don't retry, show identity
+                if error_code == 'UnauthorizedOperation' or (error_code and 'unauthorized' in error_code.lower()):
+                    self._handle_aws_error(e, description)
+
+                # Handle other errors with retry logic
                 if attempt < self.max_retries:
                     Colors.perr(f"Attempt {attempt}/{self.max_retries} failed to {description}: {str(e)}, retrying in {self.retry_delay}s...")
                     time.sleep(self.retry_delay)
@@ -199,19 +549,28 @@ class AWSCollector:
             params['VpcIds'] = vpc_ids
 
         print(format_aws_cli_command('ec2', 'describe-vpcs', params))
-        return self.ec2.describe_vpcs(**params)
+        try:
+            return self.ec2.describe_vpcs(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPCs')
 
     def describe_vpc_attribute(self, vpc_id: str, attribute: str) -> Dict:
         """Describe VPC attribute"""
         params = {'VpcId': vpc_id, 'Attribute': attribute}
         print(format_aws_cli_command('ec2', 'describe-vpc-attribute', params))
-        return self.ec2.describe_vpc_attribute(**params)
+        try:
+            return self.ec2.describe_vpc_attribute(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPC attribute')
 
     def describe_dhcp_options(self, dhcp_options_ids: List[str]) -> Dict:
         """Describe DHCP options"""
         params = {'DhcpOptionsIds': dhcp_options_ids}
         print(format_aws_cli_command('ec2', 'describe-dhcp-options', params))
-        return self.ec2.describe_dhcp_options(**params)
+        try:
+            return self.ec2.describe_dhcp_options(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe DHCP options')
 
     def describe_instances(self, filters: List[Dict] = None) -> Dict:
         """Describe EC2 instances"""
@@ -220,13 +579,19 @@ class AWSCollector:
             params['Filters'] = filters
 
         print(format_aws_cli_command('ec2', 'describe-instances', params))
-        return self.ec2.describe_instances(**params)
+        try:
+            return self.ec2.describe_instances(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe EC2 instances')
 
     def get_console_output(self, instance_id: str) -> Dict:
         """Get EC2 console output"""
         params = {'InstanceId': instance_id}
         print(f"aws ec2 get-console-output --instance-id {instance_id} --output text --query 'Output'")
-        return self.ec2.get_console_output(**params)
+        try:
+            return self.ec2.get_console_output(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, f'get console output for {instance_id}')
 
     def describe_security_groups(self, filters: List[Dict] = None) -> Dict:
         """Describe security groups"""
@@ -235,7 +600,10 @@ class AWSCollector:
             params['Filters'] = filters
 
         print(format_aws_cli_command('ec2', 'describe-security-groups', params))
-        return self.ec2.describe_security_groups(**params)
+        try:
+            return self.ec2.describe_security_groups(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe security groups')
 
     def describe_load_balancers(self, load_balancer_arns: List[str] = None) -> Dict:
         """Describe load balancers"""
@@ -244,24 +612,36 @@ class AWSCollector:
             params['LoadBalancerArns'] = load_balancer_arns
 
         print(format_aws_cli_command('elbv2', 'describe-load-balancers', params))
-        return self.elbv2.describe_load_balancers(**params)
+        try:
+            return self.elbv2.describe_load_balancers(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe load balancers')
 
     def describe_tags(self, resource_arns: List[str]) -> Dict:
         """Describe ELB tags"""
         params = {'ResourceArns': resource_arns}
         print(format_aws_cli_command('elbv2', 'describe-tags', params))
-        return self.elbv2.describe_tags(**params)
+        try:
+            return self.elbv2.describe_tags(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe load balancer tags')
 
     def list_hosted_zones(self) -> Dict:
         """List Route53 hosted zones"""
         print("aws route53 list-hosted-zones --output json")
-        return self.route53.list_hosted_zones()
+        try:
+            return self.route53.list_hosted_zones()
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'list hosted zones')
 
     def list_resource_record_sets(self, hosted_zone_id: str) -> Dict:
         """List Route53 resource record sets"""
         params = {'HostedZoneId': hosted_zone_id}
         print(format_aws_cli_command('route53', 'list-resource-record-sets', params))
-        return self.route53.list_resource_record_sets(**params)
+        try:
+            return self.route53.list_resource_record_sets(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, f'list resource record sets for {hosted_zone_id}')
 
     def lookup_events(self, start_time: datetime, end_time: datetime) -> List[Dict]:
         """Lookup CloudTrail events"""
@@ -273,31 +653,40 @@ class AWSCollector:
 
         print(format_aws_cli_command('cloudtrail', 'lookup-events', params))
 
-        events = []
-        paginator = self.cloudtrail.get_paginator('lookup_events')
-        for page in paginator.paginate(**params):
-            events.extend(page.get('Events', []))
-
-        return events
+        try:
+            events = []
+            paginator = self.cloudtrail.get_paginator('lookup_events')
+            for page in paginator.paginate(**params):
+                events.extend(page.get('Events', []))
+            return events
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'lookup CloudTrail events')
 
     def describe_vpc_endpoint_service_configurations(self, filters: List[Dict]) -> Dict:
         """Describe VPC endpoint service configurations"""
         params = {'Filters': filters}
         print(format_aws_cli_command('ec2', 'describe-vpc-endpoint-service-configurations', params))
-        return self.ec2.describe_vpc_endpoint_service_configurations(**params)
+        try:
+            return self.ec2.describe_vpc_endpoint_service_configurations(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPC endpoint service configurations')
 
     def describe_vpc_endpoint_connections(self, filters: List[Dict]) -> Dict:
         """Describe VPC endpoint connections"""
         params = {'Filters': filters}
         print(format_aws_cli_command('ec2', 'describe-vpc-endpoint-connections', params))
-        return self.ec2.describe_vpc_endpoint_connections(**params)
+        try:
+            return self.ec2.describe_vpc_endpoint_connections(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPC endpoint connections')
 
 
 class ClusterDataCollector:
     """Main collector class for ROSA cluster artifacts"""
 
     def __init__(self, cluster_id: str, work_dir: str = ".", start_date: str = None,
-                 elapsed_time: str = None, period: int = 300, force_update: bool = False):
+                 elapsed_time: str = None, period: int = 300, force_update: bool = False,
+                 debug: bool = False):
         self.cluster_id = cluster_id
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(exist_ok=True)
@@ -306,12 +695,13 @@ class ClusterDataCollector:
         self.elapsed_time = elapsed_time
         self.period = period
         self.force_update = force_update
+        self.debug = debug
 
         self.file_prefix = self.work_dir / cluster_id
         self.last_run_file = self.work_dir / "last_run.json"
 
         # Initialize AWS collector
-        self.aws = AWSCollector()
+        self.aws = AWSCollector(debug=debug)
 
         # Runtime variables
         self.capture_start = None
@@ -324,9 +714,12 @@ class ClusterDataCollector:
 
     def run(self):
         """Main execution flow"""
-        Colors.blue(f"This may require refreshing local AWS creds, example...")
-        Colors.blue(f"eval $(ocm backplane cloud credentials {self.cluster_id} -o env)")
-        print()
+        # Validate AWS credentials first
+        if not self.aws.validate_credentials():
+            Colors.perr("\nAWS credential validation failed. Cannot proceed with data collection.")
+            Colors.perr(f"\nTo set credentials, run:")
+            Colors.perr(f"  eval $(ocm backplane cloud credentials {self.cluster_id} -o env)")
+            sys.exit(1)
 
         # Get OCM cluster info
         self._get_ocm_cluster_info()
@@ -1094,6 +1487,7 @@ OPTIONS:
   -e, --elapsed <time>          CloudTrail capture window (e.g., "3h", "2d", "4days")
   -p, --period <seconds>        CloudWatch metrics period in seconds (default: 300)
   -f, --force-update            Force recalculation of time range, ignore last_run.json
+  --debug                       Enable debug output (shows proxy config, AWS commands, etc.)
   -h, --help                    Display this help message and exit
 
 EXAMPLES:
@@ -1103,6 +1497,9 @@ EXAMPLES:
 
   # Use custom time window
   ./get_install_artifacts.py -c <clusterid> -s 2025-01-15T10:30:00Z -e 3h
+
+  # Enable debug output to troubleshoot proxy/credential issues
+  ./get_install_artifacts.py -c <clusterid> --debug
 """
     print(help_text)
 
@@ -1120,6 +1517,7 @@ def main():
     parser.add_argument('-e', '--elapsed', help='Elapsed time (e.g., "3h", "2days")')
     parser.add_argument('-p', '--period', type=int, default=300, help='CloudWatch metrics period in seconds')
     parser.add_argument('-f', '--force-update', action='store_true', help='Force recalculation of time range')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
     parser.add_argument('-h', '--help', action='store_true', help='Show help message')
 
     args = parser.parse_args()
@@ -1141,7 +1539,8 @@ def main():
         start_date=args.start,
         elapsed_time=args.elapsed,
         period=args.period,
-        force_update=args.force_update
+        force_update=args.force_update,
+        debug=args.debug
     )
 
     collector.run()

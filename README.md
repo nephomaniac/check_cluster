@@ -6,27 +6,79 @@ Automated data collection and health validation tools for Red Hat OpenShift Serv
 
 This repository contains two complementary tools for ROSA cluster troubleshooting and analysis:
 
-1. **`get_install_artifacts.sh`** - Data collection script
-2. **`check_aws_health.py`** - Health validation and analysis script
+1. **`get_install_artifacts.py`** / **`get_install_artifacts.sh`** - Data collection scripts (Python and Bash versions)
+2. **`check_cluster_artifacts.py`** - Health validation and analysis script with interactive HTML reports
 
 Together, these tools provide comprehensive cluster diagnostics for installation failures, networking issues, and post-mortem analysis.
 
 ---
 
+## Installation
+
+### Using uv (Recommended - Fast!)
+
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create a virtual environment and install dependencies
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+uv pip install -r requirements.txt
+```
+
+### Using pip (Traditional)
+
+```bash
+# Create a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Using uv run (No venv needed!)
+
+```bash
+# Run directly with uv (automatically manages dependencies)
+uv run get_install_artifacts.py -c <cluster-id>
+uv run check_cluster_artifacts.py -d .
+```
+
+---
+
 ## Quick Start
+
+### With uv (recommended):
 
 ```bash
 # 1. Refresh AWS credentials
 eval $(ocm backplane cloud credentials <cluster-id> -o env)
 
 # 2. Collect cluster data
-./get_install_artifacts.sh -c <cluster-id>
+uv run get_install_artifacts.py -c <cluster-id>
 
 # 3. Run health check analysis
-python3 check_aws_health.py
+uv run check_cluster_artifacts.py -d .
+```
 
-# OR: Run health check from anywhere with explicit directory
-python3 check_aws_health.py -d /path/to/cluster/data
+### Traditional method:
+
+```bash
+# 1. Refresh AWS credentials
+eval $(ocm backplane cloud credentials <cluster-id> -o env)
+
+# 2. Collect cluster data (Bash version)
+./get_install_artifacts.sh -c <cluster-id>
+
+# OR: Python version with venv activated
+python3 get_install_artifacts.py -c <cluster-id>
+
+# 3. Run health check analysis
+python3 check_cluster_artifacts.py -d /path/to/cluster/data
 ```
 
 ---
@@ -96,7 +148,91 @@ Examples:
 
 ---
 
-## Tool 2: check_aws_health.py
+## Tool 1b: get_install_artifacts.py (Python Version)
+
+### Purpose
+
+Python implementation of the data collection script using boto3 for AWS API calls. Provides the same functionality as the Bash version with better structure and error handling.
+
+### Key Differences from Bash Version
+
+- **Uses boto3** for AWS operations instead of AWS CLI
+- **Prints AWS CLI equivalents** before each boto3 call for transparency
+- **Better error handling** with detailed exception messages
+- **Object-oriented design** for maintainability
+- **Type hints** for better code clarity
+- **Automatic retry logic** for CloudWatch metrics (3 attempts, 1 second delay)
+
+### Usage
+
+```bash
+# Display help
+./get_install_artifacts.py --help
+# Or with uv
+uv run get_install_artifacts.py --help
+
+# Basic collection (default 2-hour window)
+uv run get_install_artifacts.py -c <cluster-id>
+
+# Custom time window
+uv run get_install_artifacts.py -c <cluster-id> -s 2025-01-15T10:30:00Z -e 3h
+
+# Collect in specific directory
+uv run get_install_artifacts.py -c <cluster-id> -d /path/to/data
+
+# Force recalculation of time range
+uv run get_install_artifacts.py -c <cluster-id> --force-update
+```
+
+### Options
+
+All options are the same as the Bash version:
+- `-c, --cluster <cluster-id>` - ROSA cluster ID (required)
+- `-d, --dir <directory>` - Working directory (default: current directory)
+- `-s, --start <date>` - Start date (YYYY-MM-DDTHH:MM:SSZ)
+- `-e, --elapsed <time>` - Time window (e.g., "3h", "2days", "30m")
+- `-p, --period <seconds>` - CloudWatch metrics period (default: 300)
+- `-f, --force-update` - Force recalculation of time range
+- `-h, --help` - Display help message
+
+### Prerequisites
+
+- **Python 3.8+**
+- **boto3**: `pip install boto3` or `uv pip install boto3`
+- **OCM CLI** (authenticated)
+- **AWS credentials**: `eval $(ocm backplane cloud credentials <cluster-id> -o env)`
+- **osdctl** (optional): For cluster context
+
+### Example AWS CLI Command Printing
+
+Before each boto3 call, the equivalent AWS CLI command is printed:
+
+```bash
+aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization --dimensions Name=InstanceId,Value=i-1234567890abcdef0 --start-time 2025-01-15T10:00:00Z --end-time 2025-01-15T12:00:00Z --period 300 --statistics Average --output json
+```
+
+This makes it easy to:
+- Understand what operations are being performed
+- Debug AWS API issues
+- Manually rerun commands if needed
+
+### Time Range Behavior
+
+#### Automatic Reuse
+If `last_run.json` exists and no time arguments are provided, automatically reuses the previous time range.
+
+#### Ready vs Non-Ready Clusters
+- **Ready clusters**: Uses current time window (now - elapsed to now)
+- **Non-ready clusters**: Uses cluster creation time + elapsed window
+
+#### Custom Time Windows
+- `3h` or `3hours` - 3 hours
+- `30m` or `30minutes` - 30 minutes
+- `2d` or `2days` - 2 days
+
+---
+
+## Tool 2: check_cluster_artifacts.py
 
 ### Purpose
 

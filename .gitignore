@@ -208,6 +208,29 @@ __marimo__/
 
 # Cluster health check reports (contain sensitive cluster data)
 results_*.md
+results_*/
+
+# Cluster artifacts (optional - uncomment to exclude from version control)
+# *_cluster.json
+# *_resources.json
+# *_cluster_context.json
+# *_ec2_instances.json
+# *_vpc-*.json
+# *_security_groups.json
+# *_load_balancer*.json
+# *_cloudtrail.json
+# *_console.log
+# *_CPUUtilization_*.json
+# *_mem_used_percent_*.json
+# *_InstanceEBS*.json
+# *_bw_*.json
+# *_pps_*.json
+# *_route53_*.json
+# *_hosted_zones.json
+# *_VPC_IDS.json
+# *_DHCP_OPT.json
+# *_vpc_endpoint_service*.json
+# last_run.json
 
 # Claude update documentation (may contain sensitive cluster IDs/data)
 claude_updates/
