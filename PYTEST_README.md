@@ -2,6 +2,16 @@
 
 A modern pytest-based health check tool for validating ROSA (Red Hat OpenShift Service on AWS) cluster configurations.
 
+---
+
+## 📚 Documentation Navigation
+
+- **[Main README](README.md)** - Overview, installation, and data collection tools
+- **[Quick Start with uv](QUICKSTART_UV.md)** - Fastest way to get started
+- **[PYTEST_README.md](PYTEST_README.md)** (this file) - Pytest framework architecture and usage
+
+---
+
 ## Overview
 
 This tool analyzes ROSA cluster artifacts collected from AWS and validates the cluster configuration against expected best practices and requirements. It generates detailed test reports in both JSON and interactive HTML formats.
@@ -490,3 +500,12 @@ See repository license file.
 For issues, questions, or contributions:
 - File an issue in the repository
 - Contact the ROSA SRE team
+
+---
+
+## See Also
+
+- **[Main README](README.md)** - Data collection tools (`get_install_artifacts.py`), requirements, and workflow examples
+- **[Quick Start with uv](QUICKSTART_UV.md)** - Fast setup using uv package manager (10-100x faster than pip)
+- **Data Collection**: See main README for `get_install_artifacts.py` documentation and AWS resource collection details
+- **Integration**: See main README [Integration section](README.md#integration) for how test framework integrates with data collection

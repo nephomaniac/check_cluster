@@ -2,6 +2,16 @@
 
 This guide shows how to use these tools with `uv`, a fast Python package installer and runner.
 
+---
+
+## 📚 Documentation Navigation
+
+- **[Main README](README.md)** - Complete documentation, tool reference, and requirements
+- **[Pytest Health Check Framework](PYTEST_README.md)** - Test framework architecture and extending tests
+- **[QUICKSTART_UV.md](QUICKSTART_UV.md)** (this file) - Fast setup with uv
+
+---
+
 ## What is uv?
 
 `uv` is a modern, fast Python package installer and resolver (similar to pip but much faster). It can also run Python scripts with automatic dependency management, eliminating the need to manually create virtual environments.
@@ -254,9 +264,24 @@ Just run your script and uv handles the rest!
 
 ## Additional Resources
 
+### External Documentation
 - **uv documentation**: https://docs.astral.sh/uv/
-- **Project documentation**: See `README.md`
-- **Bash version**: If you prefer bash, use `get_install_artifacts.sh`
+- **pytest documentation**: https://docs.pytest.org/
+
+### Project Documentation
+- **[Main README](README.md)** - Complete tool documentation and reference
+  - Data collection with `get_install_artifacts.py`
+  - Health validation with `check_cluster_artifacts.py`
+  - AWS permissions and requirements
+  - Troubleshooting guide
+
+- **[Pytest Framework Guide](PYTEST_README.md)** - Modern health check framework
+  - 63 tests across 7 categories
+  - How to run specific tests
+  - Extending the test framework
+  - HTML report interpretation
+
+- **Legacy Tools**: Bash version available as `get_install_artifacts.sh` (deprecated)
 
 ## Tips
 
@@ -269,7 +294,21 @@ Just run your script and uv handles the rest!
 
 ## Next Steps
 
-1. Read the main `README.md` for detailed tool documentation
-2. Try the quick example above
-3. Explore the generated HTML reports
-4. Customize time windows based on your investigation needs
+1. **Try the quick example above** - Get hands-on experience with the tools
+2. **[Read the Main README](README.md)** for comprehensive documentation:
+   - [Data collection options](README.md#tool-1-get_install_artifactspy-python-version---recommended)
+   - [AWS permissions required](README.md#requirements)
+   - [Workflow examples](README.md#workflow)
+   - [Troubleshooting guide](README.md#troubleshooting)
+
+3. **[Explore the Pytest Framework](PYTEST_README.md)** for advanced validation:
+   - Run specific test categories
+   - Understand test results
+   - Add custom validations
+   - Generate detailed HTML reports
+
+4. **Customize for your use case**:
+   - Adjust time windows for different incident types
+   - Use `--debug` flag for credential troubleshooting
+   - Review generated reports for visual insights
+   - Add cluster-specific test cases

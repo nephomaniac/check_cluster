@@ -2,6 +2,33 @@
 
 Automated data collection and health validation tools for Red Hat OpenShift Service on AWS (ROSA) clusters.
 
+---
+
+## 📑 Table of Contents
+
+- [Overview](#overview)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- **Tools & Features**
+  - [Tool 1: get_install_artifacts.py](#tool-1-get_install_artifactspy-python-version---recommended)
+  - [Tool 2: check_cluster_artifacts.py](#tool-2-check_cluster_artifactspy)
+  - [Validation Coverage](#validation-coverage)
+- **Usage & Integration**
+  - [Workflow Examples](#workflow)
+  - [Integration with Test Framework](#integration)
+  - [Common Use Cases](#common-use-cases)
+- **Reference**
+  - [Documentation](#documentation)
+  - [Requirements](#requirements)
+  - [Troubleshooting](#troubleshooting)
+  - [Contributing](#contributing)
+- **Additional Resources**
+  - [Related Documentation](#related-documentation)
+  - [Version History](#version-history)
+  - [Support](#support)
+
+---
+
 ## Overview
 
 This repository contains two complementary tools for ROSA cluster troubleshooting and analysis:
@@ -456,19 +483,51 @@ Beyond the legacy checks, `get_install_artifacts.py` now collects comprehensive 
 
 ## Documentation
 
-### Available Documentation Files
+### 📚 Main Documentation
 
-- **`README.md`** (this file) - Overview and quick start for data collection tools
-- **`PYTEST_README.md`** - Comprehensive pytest-based health check framework documentation
-- **`get_install_artifacts_SUMMARY.md`** - Legacy bash script documentation (deprecated)
-- **`get_install_artifacts_UPDATES.md`** - Legacy bash script updates (deprecated)
+This repository contains comprehensive documentation for different use cases and tools:
 
-### Implementation Details
+| Document | Description | Audience |
+|----------|-------------|----------|
+| **[README.md](README.md)** (this file) | Main documentation covering data collection tools and validation framework | All users |
+| **[PYTEST_README.md](PYTEST_README.md)** | Comprehensive pytest-based health check framework guide | Developers, SREs running health checks |
+| **[QUICKSTART_UV.md](QUICKSTART_UV.md)** | Quick start guide using `uv` for fast dependency management | New users, those wanting fastest setup |
 
-- See `get_install_artifacts.py` docstrings for data collection implementation details
-- See individual test modules in `tests/` directory for validation logic
-- See `reporters/html_generator.py` for HTML report generation
-- See `models/cluster.py` for cluster data model structure
+### 🔧 Component Documentation
+
+For implementation details and extending the tools:
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **Data Collection** | `get_install_artifacts.py` | Boto3-based AWS resource collection with 30+ resource types |
+| **Test Framework** | `tests/` directory | 63 pytest tests across 7 categories (security groups, VPC, instances, etc.) |
+| **Data Models** | `models/cluster.py` | ClusterData model for unified artifact access |
+| **HTML Reports** | `reporters/html_generator.py` | Interactive HTML report generation from pytest JSON results |
+| **Test Fixtures** | `conftest.py` | Session-scoped pytest fixtures for efficient data loading |
+
+### 📖 Quick Reference Guides
+
+**For New Users:**
+1. Start with [QUICKSTART_UV.md](QUICKSTART_UV.md) for the fastest setup using `uv`
+2. Use the [Quick Start](#quick-start) section below for traditional Python setup
+3. Review [Workflow Examples](#workflow) for common troubleshooting scenarios
+
+**For Developers:**
+1. Read [PYTEST_README.md](PYTEST_README.md) for test framework architecture
+2. See [Contributing](#contributing) section for adding new validations or data collection
+3. Review [Integration](#integration) section for understanding data flow
+
+**For SREs:**
+1. Use [Workflow Examples](#workflow) for operational procedures
+2. Check [Troubleshooting](#troubleshooting) for common issues
+3. See [Common Use Cases](#common-use-cases) for specific scenarios
+
+### 🗂️ Legacy Documentation
+
+The following documentation is for legacy bash-based tools (deprecated):
+
+- **`claude_updates/get_install_artifacts_SUMMARY.md`** - Bash script reference (use Python version instead)
+- **Generated reports** - HTML/Markdown reports are created in working directory after running health checks
 
 ---
 
@@ -648,6 +707,45 @@ To collect new AWS resources:
 3. File naming pattern: `{cluster_id}_{resource_type}.json`
 4. Always check for existing file before fetching (idempotent)
 5. Update README.md Integration section and PYTEST_README.md
+
+---
+
+## Related Documentation
+
+### Getting Started
+- **[Quick Start with uv](QUICKSTART_UV.md)** - Fastest way to get started with automatic dependency management
+  - No virtual environment setup needed
+  - 10-100x faster than pip
+  - Automatic dependency resolution
+  - Complete workflow examples
+
+### Testing and Validation
+- **[Pytest Health Check Framework](PYTEST_README.md)** - Modern pytest-based validation framework
+  - 63 individual tests across 7 categories
+  - Interactive HTML report generation
+  - Modular test organization
+  - How to add new tests and extend the framework
+  - Test results interpretation guide
+
+### Development References
+- **Test Modules**: See `tests/` directory for individual test implementations
+  - `test_security_groups.py` - Traffic flow validation (13 tests)
+  - `test_vpc.py` - Network configuration (6 tests)
+  - `test_instances.py` - EC2 instance health (10 tests)
+  - `test_load_balancers.py` - Load balancer validation (11 tests)
+  - `test_route53.py` - DNS configuration (5 tests)
+  - `test_cloudtrail.py` - Event analysis (6 tests)
+  - `test_installation.py` - Cluster status (12 tests)
+
+- **Data Collection**: `get_install_artifacts.py`
+  - 30+ AWS resource types
+  - Multi-AZ zone-specific collection
+  - Automatic time range management
+  - Proxy and CA bundle support
+
+- **Models**: `models/` directory
+  - `cluster.py` - ClusterData model
+  - `test_result.py` - Test result structures
 
 ---
 
