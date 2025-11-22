@@ -1,0 +1,8 @@
+# uv configuration for this project
+# This file is optional - uv will work fine without it
+
+# Use the project's .python-version file
+python-version = "3.11"
+
+# Cache directory (optional - defaults to platform-specific cache)
+# cache-dir = ".uv-cache"
