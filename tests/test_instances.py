@@ -52,7 +52,13 @@ def test_control_plane_instances_running(cluster_data: ClusterData):
     non_running = []
     for instance in masters:
         instance_id = instance.get('InstanceId', 'unknown')
-        state = instance.get('State', {}).get('Name', 'unknown')
+
+        # Handle both formats: string or dict
+        state_data = instance.get('State', 'unknown')
+        if isinstance(state_data, dict):
+            state = state_data.get('Name', 'unknown')
+        else:
+            state = state_data
 
         if state != 'running':
             non_running.append(f"{instance_id} ({state})")
@@ -71,7 +77,13 @@ def test_worker_instances_running(cluster_data: ClusterData):
     non_running = []
     for instance in workers:
         instance_id = instance.get('InstanceId', 'unknown')
-        state = instance.get('State', {}).get('Name', 'unknown')
+
+        # Handle both formats: string or dict
+        state_data = instance.get('State', 'unknown')
+        if isinstance(state_data, dict):
+            state = state_data.get('Name', 'unknown')
+        else:
+            state = state_data
 
         if state != 'running':
             non_running.append(f"{instance_id} ({state})")
@@ -86,8 +98,9 @@ def test_instances_have_private_ips(cluster_data: ClusterData):
 
     for instance in cluster_data.ec2_instances:
         instance_id = instance.get('InstanceId', 'unknown')
-        private_ip = instance.get('PrivateIpAddress', '')
+        private_ip = instance.get('PrivateIpAddress')
 
+        # Check for null, empty string, or missing
         if not private_ip:
             instances_without_ip.append(instance_id)
 
@@ -122,8 +135,9 @@ def test_instances_have_security_groups(cluster_data: ClusterData):
 
     for instance in cluster_data.ec2_instances:
         instance_id = instance.get('InstanceId', 'unknown')
-        security_groups = instance.get('SecurityGroups', [])
+        security_groups = instance.get('SecurityGroups')
 
+        # Check for null, empty list, or missing
         if not security_groups:
             instances_without_sgs.append(instance_id)
 
