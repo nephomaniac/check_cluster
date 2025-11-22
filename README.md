@@ -58,10 +58,13 @@ uv run check_cluster_artifacts.py -d .
 # 1. Refresh AWS credentials
 eval $(ocm backplane cloud credentials <cluster-id> -o env)
 
-# 2. Collect cluster data
+# 2. Collect cluster data (Python version - recommended)
 uv run get_install_artifacts.py -c <cluster-id>
 
-# 3. Run health check analysis
+# 3. Run health check analysis (new pytest-based tool)
+python run_tests.py --cluster-dir .
+
+# OR: Legacy script (still available)
 uv run check_cluster_artifacts.py -d .
 ```
 
@@ -71,13 +74,18 @@ uv run check_cluster_artifacts.py -d .
 # 1. Refresh AWS credentials
 eval $(ocm backplane cloud credentials <cluster-id> -o env)
 
-# 2. Collect cluster data (Bash version)
-./get_install_artifacts.sh -c <cluster-id>
-
-# OR: Python version with venv activated
+# 2. Collect cluster data
+# Python version (recommended):
 python3 get_install_artifacts.py -c <cluster-id>
 
+# OR: Bash version (also available):
+./get_install_artifacts.sh -c <cluster-id>
+
 # 3. Run health check analysis
+# New pytest-based tool:
+python3 run_tests.py --cluster-dir /path/to/cluster/data
+
+# OR: Legacy script:
 python3 check_cluster_artifacts.py -d /path/to/cluster/data
 ```
 

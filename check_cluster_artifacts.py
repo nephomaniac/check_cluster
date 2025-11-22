@@ -10,7 +10,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, field
 
 # Global variables
 html_sections = {}  # Accumulate HTML sections by category
@@ -19,6 +20,53 @@ cluster_state = 'unknown'  # Cluster state (ready, error, installing, etc.)
 incident_date = None  # Incident timestamp for temporal filtering (datetime object)
 metrics_data = {}  # Store metrics data for chart generation
 cloudtrail_events = []  # Store CloudTrail events for timeline
+current_check_category = None  # Track which category is currently being checked
+all_check_results = {}  # Store all CategoryCheckResults objects by category
+
+
+@dataclass
+class CheckResult:
+    """Represents the result of a single check"""
+    description: str  # What was checked
+    result: str  # PASS, FAIL, WARNING, ERROR
+    details: Optional[str] = None  # Additional details (especially for failures)
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional metadata
+
+    def is_failure(self) -> bool:
+        """Check if this result represents a failure"""
+        return self.result in ['FAIL', 'ERROR', 'WARNING']
+
+
+@dataclass
+class CategoryCheckResults:
+    """Represents all check results for a category"""
+    category_name: str
+    checks: List[CheckResult] = field(default_factory=list)
+
+    def add_check(self, description: str, result: str, details: Optional[str] = None):
+        """Add a check result to this category"""
+        self.checks.append(CheckResult(description, result, details))
+
+    def get_status(self) -> str:
+        """Get overall status for this category"""
+        if any(c.result == 'ERROR' for c in self.checks):
+            return 'ERROR'
+        if any(c.result == 'FAIL' for c in self.checks):
+            return 'FAIL'
+        if any(c.result == 'WARNING' for c in self.checks):
+            return 'WARNING'
+        return 'OK'
+
+    def get_issues(self) -> List[str]:
+        """Get list of issues (for backward compatibility)"""
+        issues = []
+        for check in self.checks:
+            if check.is_failure():
+                if check.details:
+                    issues.append(f"{check.description}: {check.details}")
+                else:
+                    issues.append(check.description)
+        return issues
 
 def add_html_section(category: str, title: str, content: str, status: str = "OK"):
     """Add HTML section for a check category"""
@@ -55,7 +103,9 @@ def print_header(text: str):
     add_markdown(f'\n<a name="{section_id}"></a>\n## {text}\n')
 
 def print_status(status: str, message: str):
-    """Print a status message with color coding"""
+    """Print a status message with color coding and track the check result"""
+    global current_check_category, all_check_results
+
     if status.upper() == "OK" or status.upper() == "HEALTHY":
         color = Colors.GREEN
         symbol = "✓"
@@ -73,6 +123,24 @@ def print_status(status: str, message: str):
 
     # Add to markdown
     add_markdown(f"{md_badge} **{status}**: {message}\n\n")
+
+    # Track this check result if we're in an active check category
+    if current_check_category:
+        if current_check_category not in all_check_results:
+            category_name = current_check_category.replace('_', ' ').title()
+            all_check_results[current_check_category] = CategoryCheckResults(category_name)
+
+        # Normalize status to standard values
+        if status.upper() in ["OK", "HEALTHY"]:
+            result_status = "PASS"
+        else:
+            result_status = status.upper()
+
+        all_check_results[current_check_category].add_check(
+            description=message,
+            result=result_status,
+            details=None  # No additional details for now
+        )
 
 def load_json_file(filename: str, suppress_warning: bool = False) -> Dict:
     """Load a JSON file and return its contents"""
@@ -1010,497 +1078,102 @@ def print_cloudtrail_correlation(events: List[Dict], context: str, cluster_id: s
 
 def check_security_groups(cluster_id: str, infra_id: str = None) -> Tuple[str, List[str]]:
     """
-    Check security groups health and verify required OpenShift rules
+    Check security groups health and verify required traffic flows.
+
+    Uses the new test framework to validate that security groups allow
+    necessary traffic for cluster operation.
+
     Args:
         cluster_id: The cluster ID used for file naming
         infra_id: The infrastructure ID (if None, will derive from cluster_id)
-    Returns: (status, list of issues)
+    Returns: (status, list of issues) - for backward compatibility
     """
+    from security_group_tests import SecurityGroupTests
+    from test_framework import TestStatus
+
     print_header("Security Groups Health Check")
 
-    data = load_json_file(f"{cluster_id}_security_groups.json")
-    if not data:
+    # Load required data
+    sg_data = load_json_file(f"{cluster_id}_security_groups.json")
+    if not sg_data:
         return ("ERROR", ["Security groups file not found or empty"])
 
-    issues = []
-    security_groups = data.get('SecurityGroups', [])
-    faulty_resource_ids = []  # Track resource IDs with issues
+    cluster_data = load_json_file(f"{cluster_id}_cluster.json")
+    if not cluster_data:
+        return ("ERROR", ["Cluster data file not found"])
 
-    print(f"Total Security Groups: {len(security_groups)}")
-
-    # Required security groups and their rules for OpenShift/ROSA
     if infra_id is None:
-        infra_id = cluster_id.split('_')[0]
+        infra_id = cluster_data.get('infra_id', cluster_id.split('_')[0])
 
+    security_groups = sg_data.get('SecurityGroups', [])
+    print(f"Total Security Groups: {len(security_groups)}")
     print(f"Using Infrastructure ID: {infra_id}")
 
-    # Determine cluster type (public or private) based on API listening mode
-    cluster_data = load_json_file(f"{cluster_id}_cluster.json")
-    api_listening = cluster_data.get('api', {}).get('listening', 'unknown') if cluster_data else 'unknown'
+    # Determine cluster type
+    api_listening = cluster_data.get('api', {}).get('listening', 'unknown')
     is_private_cluster = (api_listening == 'internal')
-
     print(f"Cluster Type: {'PRIVATE' if is_private_cluster else 'PUBLIC'}")
     print(f"API Listening: {api_listening}")
 
-    required_security_groups = {
-        f"{infra_id}-lb": {
-            "description": "Load Balancer Security Group",
-            "required_ingress": [
-                {"port": 6443, "protocol": "tcp", "description": "Kubernetes API Server"},
-                {"port": 22623, "protocol": "tcp", "description": "Machine Config Server"},
-            ]
-        },
-        f"{infra_id}-node": {
-            "description": "Worker/Compute Node Security Group",
-            "required_ingress": [
-                {"port": 22, "protocol": "tcp", "description": "SSH"},
-                {"port": 10250, "protocol": "tcp", "description": "Kubelet"},
-                {"port_range": (30000, 32767), "protocol": "tcp", "description": "NodePort Services"},
-                {"port": 4789, "protocol": "udp", "description": "VXLAN"},
-                {"port": 6081, "protocol": "udp", "description": "Geneve"},
-                {"port_range": (9000, 9999), "protocol": "tcp", "description": "Internal cluster communication"},
-            ]
-        },
-        f"{infra_id}-controlplane": {
-            "description": "Control Plane/Master Security Group",
-            "required_ingress": [
-                {"port": 6443, "protocol": "tcp", "description": "Kubernetes API Server"},
-                {"port": 22623, "protocol": "tcp", "description": "Machine Config Server"},
-                {"port": 2379, "protocol": "tcp", "description": "etcd", "optional": True},
-                {"port": 2380, "protocol": "tcp", "description": "etcd peer", "optional": True},
-            ]
-        },
-        f"{infra_id}-apiserver-lb": {
-            "description": "API Server Load Balancer Security Group",
-            "required_ingress": [
-                {"port": 6443, "protocol": "tcp", "description": "Kubernetes API Server"},
-            ]
-        }
-    }
-
-    # Find cluster security groups
-    cluster_sgs = {}
-    for sg in security_groups:
-        sg_name = sg.get('GroupName', '')
-        if infra_id in sg_name:
-            cluster_sgs[sg_name] = sg
-
-    print(f"Cluster Security Groups Found: {len(cluster_sgs)}")
-
-    # Check for required security groups
-    for required_sg_name, requirements in required_security_groups.items():
-        if required_sg_name not in cluster_sgs:
-            issues.append(f"Missing required security group: {required_sg_name} ({requirements['description']})")
-            print_status("ERROR", f"Missing security group: {required_sg_name}")
-            continue
-
-        sg = cluster_sgs[required_sg_name]
-        sg_id = sg.get('GroupId', 'unknown')
-
-        print(f"\n{Colors.BOLD}Checking: {required_sg_name} ({sg_id}){Colors.END}")
-        print(f"  Description: {requirements['description']}")
-
-        # Get ingress rules
-        ingress_rules = sg.get('IpPermissions', [])
-
-        # Check each required rule
-        for required_rule in requirements.get('required_ingress', []):
-            required_port = required_rule.get('port')
-            required_port_range = required_rule.get('port_range')
-            required_protocol = required_rule.get('protocol')
-            rule_description = required_rule.get('description')
-            is_optional = required_rule.get('optional', False)
-
-            rule_found = False
-            matched_rule = None
-
-            for rule in ingress_rules:
-                rule_protocol = rule.get('IpProtocol', '')
-                from_port = rule.get('FromPort')
-                to_port = rule.get('ToPort')
-
-                # Check if rule matches
-                if required_port:
-                    if (rule_protocol == required_protocol and
-                        from_port == required_port and
-                        to_port == required_port):
-                        rule_found = True
-                        matched_rule = rule
-                        break
-                elif required_port_range:
-                    min_port, max_port = required_port_range
-                    if (rule_protocol == required_protocol and
-                        from_port == min_port and
-                        to_port == max_port):
-                        rule_found = True
-                        matched_rule = rule
-                        break
-
-            if rule_found and matched_rule:
-                # Extract source information
-                sources = []
-
-                # CIDR blocks
-                for ip_range in matched_rule.get('IpRanges', []):
-                    cidr = ip_range.get('CidrIp', '')
-                    if cidr:
-                        sources.append(cidr)
-
-                # Security group references
-                for sg_pair in matched_rule.get('UserIdGroupPairs', []):
-                    sg_id = sg_pair.get('GroupId', '')
-                    if sg_id:
-                        sources.append(sg_id)
-
-                # IPv6 ranges
-                for ipv6_range in matched_rule.get('Ipv6Ranges', []):
-                    cidr = ipv6_range.get('CidrIpv6', '')
-                    if cidr:
-                        sources.append(cidr)
-
-                source_str = ", ".join(sources) if sources else "any"
-                print_status("OK", f"Required rule present: {rule_description} ({required_protocol}/{required_port or required_port_range}) from {source_str}")
-
-                # Validate access type matches cluster type for API/MCS ports on load balancer SGs
-                if required_sg_name in [f"{infra_id}-lb", f"{infra_id}-apiserver-lb"]:
-                    if required_port in [6443, 22623]:  # API and MCS ports
-                        has_public_access = False
-                        has_vpc_only_access = False
-
-                        # Check CIDR blocks for access type
-                        for ip_range in matched_rule.get('IpRanges', []):
-                            cidr = ip_range.get('CidrIp', '')
-                            if cidr == '0.0.0.0/0':
-                                has_public_access = True
-                            elif cidr.startswith('10.') or cidr.startswith('172.') or cidr.startswith('192.168.'):
-                                has_vpc_only_access = True
-
-                        # Validate based on cluster type
-                        if not is_private_cluster and has_vpc_only_access and not has_public_access:
-                            # Public cluster should have public access on API/MCS ports
-                            if sg_id not in faulty_resource_ids:
-                                faulty_resource_ids.append(sg_id)
-                            issue_msg = f"{required_sg_name} ({sg_id}): Public cluster but {rule_description} only allows VPC traffic ({source_str}), should allow 0.0.0.0/0 or specific installer IP"
-                            issues.append(issue_msg)
-
-                            # Extra emphasis for port 6443 on apiserver-lb - critical for installation
-                            if required_port == 6443 and 'apiserver-lb' in required_sg_name:
-                                print_status("ERROR", f"CRITICAL: Missing public access to Kubernetes API (port 6443)")
-                                print(f"    {Colors.RED}{Colors.BOLD}Impact: Cluster installation will fail with 'KubeAPIWaitFailed'{Colors.END}")
-                                print(f"    {Colors.YELLOW}Current access: {source_str} (VPC-only){Colors.END}")
-                                print(f"    {Colors.GREEN}Required: 0.0.0.0/0 (public access) or specific installer IP{Colors.END}")
-                                print(f"\n    {Colors.BOLD}Remediation:{Colors.END}")
-                                print(f"    aws ec2 authorize-security-group-ingress \\")
-                                print(f"      --group-id {sg_id} \\")
-                                print(f"      --protocol tcp \\")
-                                print(f"      --port 6443 \\")
-                                print(f"      --cidr 0.0.0.0/0 \\")
-                                print(f"      --description 'Kubernetes API Server traffic for public access'")
-                                add_markdown(f"\n**CRITICAL ISSUE**: Missing public access to Kubernetes API (port 6443)\n\n")
-                                add_markdown(f"- **Impact**: Cluster installation fails with `KubeAPIWaitFailed`\n")
-                                add_markdown(f"- **Current access**: `{source_str}` (VPC-only)\n")
-                                add_markdown(f"- **Required**: `0.0.0.0/0` (public access) or specific installer IP\n\n")
-                                add_markdown(f"**Remediation**:\n```bash\n")
-                                add_markdown(f"aws ec2 authorize-security-group-ingress \\\\\n")
-                                add_markdown(f"  --group-id {sg_id} \\\\\n")
-                                add_markdown(f"  --protocol tcp \\\\\n")
-                                add_markdown(f"  --port 6443 \\\\\n")
-                                add_markdown(f"  --cidr 0.0.0.0/0 \\\\\n")
-                                add_markdown(f"  --description 'Kubernetes API Server traffic for public access'\n")
-                                add_markdown(f"```\n\n")
-                            else:
-                                print_status("WARNING", f"Public cluster but rule only allows VPC traffic - may cause installation failures")
-                                print(f"    Expected rule: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)")
-                                add_markdown(f"- **Expected rule**: {required_protocol}/{required_port} from 0.0.0.0/0 (or specific installer IP)\n\n")
-
-                        elif is_private_cluster and has_public_access:
-                            # Private cluster should not have public access on API/MCS ports
-                            if sg_id not in faulty_resource_ids:
-                                faulty_resource_ids.append(sg_id)
-                            issue_msg = f"{required_sg_name} ({sg_id}): Private cluster but {rule_description} allows public access (0.0.0.0/0)"
-                            issues.append(issue_msg)
-                            print_status("WARNING", f"Private cluster but rule allows public access - potential security risk")
-            else:
-                # Track faulty security group ID
-                if sg_id not in faulty_resource_ids:
-                    faulty_resource_ids.append(sg_id)
-
-                if is_optional:
-                    print_status("WARNING", f"Optional rule missing: {rule_description} ({required_protocol}/{required_port or required_port_range})")
-                else:
-                    # Show what the missing rule should be based on cluster type
-                    expected_source = ""
-                    if is_private_cluster:
-                        expected_source = " (expected source: VPC CIDR or security group references)"
-                    else:
-                        if required_port in [6443, 22623]:  # API and MCS ports
-                            expected_source = " (expected source: 0.0.0.0/0 for public access, or specific installer IP)"
-                        else:
-                            expected_source = " (expected source: security group references or VPC CIDR)"
-
-                    issue_msg = f"{required_sg_name} ({sg_id}): Missing required rule for {rule_description} ({required_protocol}/{required_port or required_port_range}){expected_source}"
-                    issues.append(issue_msg)
-                    print_status("ERROR", f"Missing required rule: {rule_description}{expected_source}")
-
-        # Check egress rules
-        egress_rules = sg.get('IpPermissionsEgress', [])
-        if not egress_rules:
-            issues.append(f"Security Group {sg_id} ({required_sg_name}) has no egress rules")
-            print_status("WARNING", f"No egress rules found")
-        else:
-            # Check for all-traffic egress (typical for OpenShift)
-            has_all_egress = False
-            for egress in egress_rules:
-                if egress.get('IpProtocol') == '-1':
-                    has_all_egress = True
-                    break
-            if has_all_egress:
-                print_status("OK", "Egress: All traffic allowed")
-            else:
-                print_status("WARNING", f"Egress: {len(egress_rules)} rules (not all-traffic)")
-
-        # Check for overly permissive public ingress rules
-        for rule in ingress_rules:
-            from_port = rule.get('FromPort', 'any')
-            to_port = rule.get('ToPort', 'any')
-            protocol = rule.get('IpProtocol', 'any')
-
-            for ip_range in rule.get('IpRanges', []):
-                cidr = ip_range.get('CidrIp', '')
-                if cidr == '0.0.0.0/0':
-                    # Public access to API server (6443) may be intentional
-                    if from_port == 6443 and to_port == 6443:
-                        print_status("WARNING", f"Public access allowed on port 6443 (API Server) - verify this is intentional")
-                    else:
-                        port_range = f"{from_port}-{to_port}" if from_port != to_port else str(from_port)
-                        issues.append(f"{required_sg_name}: Public access (0.0.0.0/0) on port(s) {port_range}")
-                        print_status("WARNING", f"Public access on port(s) {port_range}")
-
-    # Detailed Security Group Analysis
-    print(f"\n{Colors.BOLD}Detailed Security Group Analysis:{Colors.END}")
-
-    # Analyze each security group in detail
-    for sg_name, sg in cluster_sgs.items():
-        if sg_name not in required_security_groups:
-            continue
-
-        sg_id = sg.get('GroupId', 'unknown')
-        ingress_rules = sg.get('IpPermissions', [])
-
-        print(f"\n{Colors.BOLD}{sg_name} ({sg_id}):{Colors.END}")
-
-        # Categorize and display all ingress rules
-        print(f"  {Colors.BOLD}Ingress Rules ({len(ingress_rules)} total):{Colors.END}")
-
-        for rule in ingress_rules:
-            protocol = rule.get('IpProtocol', 'unknown')
-            from_port = rule.get('FromPort', 'N/A')
-            to_port = rule.get('ToPort', 'N/A')
-
-            # Format port range
-            if from_port == to_port or from_port == 'N/A':
-                port_str = str(from_port)
-            else:
-                port_str = f"{from_port}-{to_port}"
-
-            # Get sources
-            sources = []
-            for ip_range in rule.get('IpRanges', []):
-                cidr = ip_range.get('CidrIp', '')
-                desc = ip_range.get('Description', '')
-                if cidr:
-                    sources.append(f"{cidr}" + (f" ({desc})" if desc else ""))
-
-            for sg_pair in rule.get('UserIdGroupPairs', []):
-                sg_id_ref = sg_pair.get('GroupId', '')
-                desc = sg_pair.get('Description', '')
-                if sg_id_ref:
-                    sources.append(f"{sg_id_ref}" + (f" ({desc})" if desc else ""))
-
-            source_str = ", ".join(sources) if sources else "any"
-
-            # Display the rule
-            if protocol in ['tcp', 'udp']:
-                print(f"    • Port {port_str} ({protocol.upper()}) from {source_str}")
-            elif protocol == 'icmp':
-                print(f"    • ICMP from {source_str}")
-            elif protocol == '50':
-                print(f"    • ESP (Protocol 50) from {source_str}")
-            elif protocol == '-1':
-                print(f"    • All traffic from {source_str}")
-            else:
-                print(f"    • Protocol {protocol}, ports {port_str} from {source_str}")
-
-    # Summary
-    print(f"\n{Colors.BOLD}Security Group Summary:{Colors.END}")
-    print(f"  Required Groups: {len(required_security_groups)}")
-    print(f"  Found: {len(cluster_sgs)}")
-    print(f"  Issues: {len(issues)}")
-
-    # API Endpoint & Security Group Configuration Mismatch Analysis
-    print(f"\n{Colors.BOLD}API Endpoint & Security Group Configuration Analysis:{Colors.END}")
-
-    # Load API endpoint from route53 data
-    api_data = load_json_file(f"{cluster_id}_route53_api_record_sets.json")
-    if api_data and isinstance(api_data, list) and len(api_data) > 0:
-        record = api_data[0]
-        api_name = record.get('Name', 'unknown')
-        if 'AliasTarget' in record:
-            api_endpoint = record['AliasTarget'].get('DNSName', 'unknown')
-            print(f"API Endpoint: {api_name} → {api_endpoint}")
-
-    # Find the load balancer security group (controls API access)
-    lb_sg = None
-    for sg_name in [f"{infra_id}-lb", f"{infra_id}-apiserver-lb"]:
-        if sg_name in cluster_sgs:
-            lb_sg = cluster_sgs[sg_name]
-            break
-
-    if lb_sg:
-        lb_sg_id = lb_sg.get('GroupId', 'unknown')
-        lb_sg_name = lb_sg.get('GroupName', 'unknown')
-
-        print(f"Analyzing Load Balancer Security Group: {lb_sg_name} ({lb_sg_id})")
-
-        # Check API port (6443) ingress rules
-        ingress_rules = lb_sg.get('IpPermissions', [])
-        api_rule_found = False
-        allows_public_access = False
-        vpc_only_access = False
-        allowed_cidrs = []
-
-        for rule in ingress_rules:
-            from_port = rule.get('FromPort')
-            to_port = rule.get('ToPort')
-
-            if from_port == 6443 and to_port == 6443:
-                api_rule_found = True
-
-                # Check CIDR blocks
-                for ip_range in rule.get('IpRanges', []):
-                    cidr = ip_range.get('CidrIp', '')
-                    desc = ip_range.get('Description', '')
-                    if cidr:
-                        allowed_cidrs.append(cidr)
-                        print(f"  Port 6443 allows: {cidr} ({desc})")
-
-                        if cidr == '0.0.0.0/0':
-                            allows_public_access = True
-                        elif cidr.startswith('10.') or cidr.startswith('172.') or cidr.startswith('192.168.'):
-                            vpc_only_access = True
-
-        if api_rule_found:
-            # Analyze configuration mismatch
-            print(f"\n{Colors.BOLD}Configuration Mismatch Analysis:{Colors.END}")
-
-            # Case 1: Public cluster (api.listening=external) with restrictive security groups
-            if not is_private_cluster and vpc_only_access and not allows_public_access:
-                print_status("ERROR", "CONFIGURATION MISMATCH DETECTED!")
-                print(f"\n{Colors.RED}{Colors.BOLD}Critical Issue:{Colors.END}")
-                print(f"  • Cluster Type: PUBLIC (API Listening: {api_listening})")
-                print(f"  • API Listening: {api_listening} (configured for PUBLIC access)")
-                print(f"  • Security Group: Only allows VPC internal traffic ({', '.join(allowed_cidrs)})")
-                print(f"  • Impact: Installer cannot reach public API endpoint from outside VPC")
-
-                print(f"\n{Colors.YELLOW}Root Cause:{Colors.END}")
-                print("  This is a PRIVATE cluster security group configuration applied to a PUBLIC cluster.")
-                print("  The cluster has public IPs but security groups block external access.")
-                print("  This mismatch prevents external installers from reaching the API during bootstrap.")
-
-                issues.append(f"Public cluster (api.listening={api_listening}) but security groups only allow VPC internal traffic")
-
-                print(f"\n{Colors.BOLD}Remediation Options:{Colors.END}")
-                print("\n  Option 1: Add Installer IP to Security Group (Quick Fix)")
-                print("    # Get installer's public IP")
-                print("    INSTALLER_IP=$(curl -s ifconfig.me)")
-                print("    # Add rule to allow installer access to API")
-                print(f"    aws ec2 authorize-security-group-ingress \\")
-                print(f"      --group-id {lb_sg_id} \\")
-                print(f"      --protocol tcp \\")
-                print(f"      --port 6443 \\")
-                print(f"      --cidr ${{INSTALLER_IP}}/32 \\")
-                print(f"      --region {cluster_data.get('region', {}).get('id', 'us-east-1')}")
-
-                print("\n  Option 2: Allow Public Access (If Intentional - Less Secure)")
-                print(f"    aws ec2 authorize-security-group-ingress \\")
-                print(f"      --group-id {lb_sg_id} \\")
-                print(f"      --protocol tcp \\")
-                print(f"      --port 6443 \\")
-                print(f"      --cidr 0.0.0.0/0 \\")
-                print(f"      --region {cluster_data.get('region', {}).get('id', 'us-east-1')}")
-
-                print("\n  Option 3: Run Installer from Within VPC (Recommended)")
-                print(f"    Deploy installer on EC2 instance within VPC ({allowed_cidrs[0] if allowed_cidrs else '10.0.0.0/16'})")
-
-                print("\n  Option 4: Recreate Cluster with Correct Configuration")
-                print("    Delete and recreate with either:")
-                print("    - Private cluster: Use api.listening=internal")
-                print("    - Public cluster: Ensure security groups allow public access from the start")
-
-                # Add LB security group to faulty resources if not already there
-                if lb_sg_id not in faulty_resource_ids:
-                    faulty_resource_ids.append(lb_sg_id)
-
-            # Case 2: Public cluster with unrestricted security group (0.0.0.0/0)
-            elif not is_private_cluster and allows_public_access:
-                print_status("WARNING", "Public cluster with unrestricted security group access")
-                print(f"\n{Colors.YELLOW}Security Recommendation:{Colors.END}")
-                print(f"  • Cluster Type: PUBLIC (API Listening: {api_listening})")
-                print("  • Security Group: Allows 0.0.0.0/0 access on port 6443")
-                print("  • Impact: API server is accessible from anywhere on the internet")
-                print(f"\n{Colors.BOLD}Recommendations:{Colors.END}")
-                print("  1. Consider restricting access to specific IP ranges")
-                print("  2. Use api.listening=internal for production clusters")
-                print("  3. Implement additional network security controls (WAF, VPN, etc.)")
-                print(f"  4. Restrict access to known installer IPs:")
-                print(f"     aws ec2 revoke-security-group-ingress --group-id {lb_sg_id} --protocol tcp --port 6443 --cidr 0.0.0.0/0")
-                print(f"     aws ec2 authorize-security-group-ingress --group-id {lb_sg_id} --protocol tcp --port 6443 --cidr <YOUR_IP>/32")
-
-                issues.append("Public cluster with unrestricted (0.0.0.0/0) API access - security risk")
-
-            # Case 3: Private cluster with VPC-only access (correct)
-            elif is_private_cluster and vpc_only_access and not allows_public_access:
-                print_status("OK", "Private cluster with VPC-only security group rules (correct configuration)")
-                print(f"  • Cluster Type: PRIVATE (API Listening: {api_listening})")
-                print(f"  • Security Group: Restricted to VPC CIDR ({', '.join(allowed_cidrs)})")
-                print("  • Configuration: Properly secured for private cluster")
-
-            # Case 4: Private cluster with public access (unusual)
-            elif is_private_cluster and allows_public_access:
-                print_status("WARNING", "Private cluster configured with public security group access")
-                print(f"\n{Colors.YELLOW}Unusual Configuration:{Colors.END}")
-                print(f"  • Cluster Type: PRIVATE (API Listening: {api_listening})")
-                print("  • Security Group: Allows 0.0.0.0/0 access")
-                print("  • Note: This is unusual for a private cluster")
-                print("  • Recommendation: Review if public access is intended")
-                issues.append("Private cluster with public (0.0.0.0/0) security group access - unusual configuration")
-
-            # Case 5: Consistent configuration
-            else:
-                if is_private_cluster:
-                    print_status("OK", "Private cluster configuration appears consistent")
-                else:
-                    print_status("OK", "Public cluster configuration appears consistent")
-
-    # Only search CloudTrail if we have specific faulty security groups
-    if faulty_resource_ids:
-        search_terms = [infra_id, 'SecurityGroup', 'AuthorizeSecurityGroupIngress',
-                       'CreateSecurityGroup', 'RevokeSecurityGroupIngress',
-                       'ModifySecurityGroupRules', 'InvalidGroup']
-
-        print(f"\n{Colors.BOLD}Searching CloudTrail for events related to faulty security groups:{Colors.END}")
-        print(f"  Security Group IDs: {', '.join(faulty_resource_ids)}")
-
-        related_events = find_related_cloudtrail_events(cluster_id, infra_id, search_terms,
-                                                        required_resource_ids=faulty_resource_ids,
-                                                        max_results=10)
-        print_cloudtrail_correlation(related_events, "Security Group Configuration", cluster_id, infra_id)
-
-    if not issues:
-        print_status("OK", "All required security groups and rules are present")
-        return ("OK", [])
+    # Run security group tests
+    sg_tests = SecurityGroupTests(cluster_data, sg_data, infra_id)
+    test_results = sg_tests.run()
+
+    # Print results
+    print(f"\nTraffic Flow Validation Results:")
+    print(f"  Total Checks: {len(test_results.tests)}")
+    print(f"  Passed: {test_results.get_success_count()}")
+    print(f"  Failed: {test_results.get_failure_count()}")
+
+    # Store test results in global tracker, converting test_framework.TestResult to our CheckResult
+    global all_check_results
+    category_results = CategoryCheckResults("Security Groups")
+
+    issues = []
+    for test in test_results.tests:
+        # Convert test_framework.TestResult to our CheckResult with metadata
+        our_check = CheckResult(
+            description=test.description,
+            result=test.status.value,  # Convert enum to string
+            details=test.details,
+            metadata=test.metadata
+        )
+        category_results.checks.append(our_check)
+
+        # Print and track issues
+        if test.status == TestStatus.PASS:
+            proto = test.metadata.get('protocol', 'unknown')
+            port_range = test.metadata.get('port_range', 'unknown')
+            direction = test.metadata.get('direction', 'unknown')
+            allowed_by = test.metadata.get('allowed_by', '')
+            print_status("OK", f"{test.description} ({proto}/{port_range} {direction}) - {allowed_by}")
+        elif test.status == TestStatus.FAIL:
+            proto = test.metadata.get('protocol', 'unknown')
+            port_range = test.metadata.get('port_range', 'unknown')
+            direction = test.metadata.get('direction', 'unknown')
+            issue_msg = f"{test.description}: No rules found to allow {proto}/{port_range} {direction} traffic"
+            issues.append(issue_msg)
+            print_status("ERROR", issue_msg)
+        elif test.status == TestStatus.WARNING:
+            proto = test.metadata.get('protocol', 'unknown')
+            port_range = test.metadata.get('port_range', 'unknown')
+            direction = test.metadata.get('direction', 'unknown')
+            issue_msg = f"{test.description}: Optional rule not found ({proto}/{port_range} {direction})"
+            issues.append(issue_msg)
+            print_status("WARNING", issue_msg)
+
+    # Store in global results (will override print_status tracking)
+    all_check_results['security_groups'] = category_results
+
+    # Determine overall status
+    overall_status = test_results.get_overall_status()
+    if overall_status == TestStatus.ERROR or overall_status == TestStatus.FAIL:
+        return ("ERROR" if any("CRITICAL" in issue for issue in issues) else "FAIL", issues)
+    elif overall_status == TestStatus.WARNING:
+        return ("WARNING", issues)
     else:
-        return ("ERROR" if len(issues) > 3 else "WARNING", issues)
+        return ("OK", issues)
+
 
 def check_instances(cluster_id: str, infra_id: str = None) -> Tuple[str, List[str]]:
     """
@@ -3252,6 +2925,33 @@ def generate_html_header(title: str) -> str:
         }}
         nav a:hover {{ background: #667eea; color: white; }}
         nav a.active {{ background: #667eea; color: white; }}
+        .nav-dropdown {{
+            position: relative;
+            display: inline-block;
+        }}
+        .nav-dropdown-content {{
+            display: none;
+            position: absolute;
+            background-color: white;
+            min-width: 200px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            border-radius: 6px;
+            z-index: 1;
+            margin-top: 5px;
+        }}
+        .nav-dropdown-content a {{
+            padding: 10px 16px;
+            display: block;
+            border-radius: 0;
+        }}
+        .nav-dropdown-content a:first-child {{ border-radius: 6px 6px 0 0; }}
+        .nav-dropdown-content a:last-child {{ border-radius: 0 0 6px 6px; }}
+        .nav-dropdown:hover .nav-dropdown-content {{
+            display: block;
+        }}
+        .dropbtn {{
+            cursor: pointer;
+        }}
         .card {{
             background: white;
             border-radius: 8px;
@@ -3376,37 +3076,147 @@ def generate_html_header(title: str) -> str:
             font-weight: 600;
             z-index: 11;
         }}
+        .clickable-row {{
+            cursor: pointer;
+        }}
+        .clickable-row:hover {{
+            background: #e9ecef !important;
+        }}
+        .collapsible {{
+            cursor: pointer;
+            padding: 10px;
+            background: #f8f9fa;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 1em;
+            width: 100%;
+            border-radius: 4px;
+            margin: 5px 0;
+            font-weight: 600;
+            color: #721c24;
+            transition: background 0.3s;
+        }}
+        .collapsible:hover {{
+            background: #e9ecef;
+        }}
+        .collapsible:after {{
+            content: '\\25B6';
+            float: right;
+            margin-left: 5px;
+            font-size: 0.8em;
+        }}
+        .collapsible.active:after {{
+            content: '\\25BC';
+        }}
+        .collapsible-content {{
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            background: #fff5f5;
+            border-left: 4px solid #f8d7da;
+            margin: 5px 0 15px 0;
+        }}
+        .collapsible-content.active {{
+            max-height: none;
+            padding: 15px;
+            border-radius: 0 4px 4px 0;
+        }}
+        .check-table {{
+            width: 100%;
+            margin-top: 15px;
+        }}
+        .check-table th {{
+            background: #f8f9fa;
+            font-weight: 600;
+        }}
+        .check-table td {{
+            vertical-align: middle;
+        }}
+        .check-pass {{
+            color: #155724;
+            font-weight: 600;
+        }}
+        .check-warning {{
+            color: #856404;
+            font-weight: 600;
+        }}
+        .check-fail {{
+            color: #721c24;
+            font-weight: 600;
+        }}
     </style>
 </head>
 <body>
 """
 
 def generate_html_footer() -> str:
-    """Generate HTML footer"""
+    """Generate HTML footer with JavaScript for collapsible sections"""
     return """
+<script>
+// Handle collapsible sections
+document.addEventListener('DOMContentLoaded', function() {
+    var coll = document.getElementsByClassName("collapsible");
+    for (var i = 0; i < coll.length; i++) {
+        coll[i].addEventListener("click", function() {
+            this.classList.toggle("active");
+            var content = this.nextElementSibling;
+            content.classList.toggle("active");
+        });
+    }
+});
+</script>
 </body>
 </html>
 """
 
 def generate_navigation(current_page: str = "index") -> str:
-    """Generate navigation menu"""
+    """Generate navigation menu with hierarchical metrics submenu"""
     pages = [
         ("index", "Summary"),
-        ("metrics", "EC2 Metrics"),
+        ("metrics", "Metrics", [
+            ("metrics-cpu-memory", "CPU & Memory"),
+            ("metrics-ebs", "EBS"),
+            ("metrics-network", "Network")
+        ]),
         ("cloudtrail", "CloudTrail Events"),
         ("details", "Detailed Checks")
     ]
 
     nav_html = '<nav>\n'
-    for page_id, page_name in pages:
-        active = ' class="active"' if page_id == current_page else ''
-        nav_html += f'    <a href="{page_id}.html"{active}>{page_name}</a>\n'
+    for page_item in pages:
+        if len(page_item) == 3:
+            # This is a menu with submenu
+            page_id, page_name, submenu = page_item
+            # Check if current page is in submenu
+            is_submenu_active = any(current_page == sub_id for sub_id, _ in submenu)
+            active_class = ' class="active"' if is_submenu_active or current_page == page_id else ''
+
+            nav_html += f'    <div class="nav-dropdown">\n'
+            nav_html += f'        <a href="javascript:void(0)"{active_class} class="dropbtn">{page_name} ▾</a>\n'
+            nav_html += f'        <div class="nav-dropdown-content">\n'
+            for sub_id, sub_name in submenu:
+                sub_active = ' class="active"' if current_page == sub_id else ''
+                nav_html += f'            <a href="{sub_id}.html"{sub_active}>{sub_name}</a>\n'
+            nav_html += f'        </div>\n'
+            nav_html += f'    </div>\n'
+        else:
+            # Regular menu item
+            page_id, page_name = page_item
+            active = ' class="active"' if page_id == current_page else ''
+            nav_html += f'    <a href="{page_id}.html"{active}>{page_name}</a>\n'
     nav_html += '</nav>\n'
 
     return nav_html
 
-def generate_metrics_charts_html(cluster_id: str, infra_id: str) -> str:
-    """Generate HTML with interactive metrics charts"""
+def generate_metrics_charts_html(cluster_id: str, infra_id: str, metric_category: str = "all") -> str:
+    """
+    Generate HTML with interactive metrics charts
+    Args:
+        cluster_id: The cluster ID
+        infra_id: Infrastructure ID to filter instances
+        metric_category: "cpu-memory", "ebs", "network", or "all"
+    """
     global source_directory, incident_date, metrics_data
 
     html = ""
@@ -3439,16 +3249,33 @@ def generate_metrics_charts_html(cluster_id: str, infra_id: str) -> str:
     if not cluster_instances:
         return "<p>No cluster instances found for metrics visualization.</p>"
 
-    # Define metrics to visualize
-    metric_configs = [
-        ('CPUUtilization', 'CPU Utilization (%)', '#ff6384'),
-        ('mem_used_percent', 'Memory Utilization (%)', '#36a2eb'),
-        ('InstanceEBSIOPSExceededCheck', 'EBS IOPS Exceeded', '#ffcd56'),
-        ('InstanceEBSThroughputExceededCheck', 'EBS Throughput Exceeded', '#4bc0c0'),
-        ('bw_in_allowance_exceeded', 'Network Bandwidth IN Exceeded', '#9966ff'),
-        ('bw_out_allowance_exceeded', 'Network Bandwidth OUT Exceeded', '#ff9f40'),
-        ('pps_allowance_exceeded', 'Network PPS Exceeded', '#ff6384')
-    ]
+    # Define metrics to visualize by category
+    all_metrics = {
+        'cpu-memory': [
+            ('CPUUtilization', 'CPU Utilization (%)', '#ff6384'),
+            ('mem_used_percent', 'Memory Utilization (%)', '#36a2eb'),
+        ],
+        'ebs': [
+            ('InstanceEBSIOPSExceededCheck', 'EBS IOPS Exceeded', '#ffcd56'),
+            ('InstanceEBSThroughputExceededCheck', 'EBS Throughput Exceeded', '#4bc0c0'),
+        ],
+        'network': [
+            ('bw_in_allowance_exceeded', 'Network Bandwidth IN Exceeded', '#9966ff'),
+            ('bw_out_allowance_exceeded', 'Network Bandwidth OUT Exceeded', '#ff9f40'),
+            ('pps_allowance_exceeded', 'Network PPS Exceeded', '#ff6384')
+        ]
+    }
+
+    # Select metric configs based on category
+    if metric_category == "all":
+        metric_configs = []
+        for cat_metrics in all_metrics.values():
+            metric_configs.extend(cat_metrics)
+    else:
+        metric_configs = all_metrics.get(metric_category, [])
+
+    if not metric_configs:
+        return f"<p>No metrics defined for category: {metric_category}</p>"
 
     chart_id = 0
 
@@ -3687,7 +3514,12 @@ def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
                       region: str, openshift_version: str, cluster_state: str,
                       results: Dict, cluster_id: str) -> str:
     """Write HTML report to results directory"""
-    global source_directory, incident_date
+    global source_directory, incident_date, all_check_results
+
+    # Replace results with CategoryCheckResults where available
+    for category in results.keys():
+        if category in all_check_results:
+            results[category] = all_check_results[category]
 
     # Create results directory
     timestamp = int(time.time())
@@ -3725,9 +3557,22 @@ def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
 
     # Summary statistics
     total_checks = len(results)
-    ok_count = sum(1 for status, _ in results.values() if status == "OK")
-    warning_count = sum(1 for status, _ in results.values() if status == "WARNING")
-    error_count = sum(1 for status, _ in results.values() if status == "ERROR")
+    ok_count = 0
+    warning_count = 0
+    error_count = 0
+
+    for result_data in results.values():
+        if isinstance(result_data, CategoryCheckResults):
+            status = result_data.get_status()
+        else:
+            status, _ = result_data
+
+        if status == "OK":
+            ok_count += 1
+        elif status == "WARNING":
+            warning_count += 1
+        elif status == "ERROR":
+            error_count += 1
 
     index_html += '<div class="grid">\n'
     index_html += '<div class="metric-card">\n'
@@ -3755,13 +3600,23 @@ def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     index_html += '<thead><tr><th>Component</th><th>Status</th><th>Issues</th></tr></thead>\n'
     index_html += '<tbody>\n'
 
-    for category, (status, issues) in results.items():
+    for category, result_data in results.items():
         category_name = category.replace('_', ' ').title()
-        status_class = f"status-{status.lower()}"
-        issue_count = len(issues)
+        category_anchor = category.replace('_', '-')
 
-        index_html += f'<tr>\n'
-        index_html += f'    <td><strong>{category_name}</strong></td>\n'
+        # Handle both CategoryCheckResults and old (status, issues) format
+        if isinstance(result_data, CategoryCheckResults):
+            status = result_data.get_status()
+            issue_count = len([c for c in result_data.checks if c.is_failure()])
+        else:
+            # Old format
+            status, issues = result_data
+            issue_count = len(issues)
+
+        status_class = f"status-{status.lower()}"
+
+        index_html += f'<tr class="clickable-row" onclick="window.location=\'details.html#{category_anchor}\'">\n'
+        index_html += f'    <td><strong><a href="details.html#{category_anchor}" style="text-decoration:none; color:inherit;">{category_name}</a></strong></td>\n'
         index_html += f'    <td><span class="status-badge {status_class}">{status}</span></td>\n'
         index_html += f'    <td>{issue_count}</td>\n'
         index_html += f'</tr>\n'
@@ -3790,17 +3645,39 @@ def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     with open(results_dir / "index.html", 'w') as f:
         f.write(index_html)
 
-    # === METRICS PAGE ===
-    metrics_html = generate_html_header(f"EC2 Metrics - {cluster_name}")
-    metrics_html += get_header_html("EC2 CloudWatch Metrics")
-    metrics_html += generate_navigation("metrics")
-    metrics_html += generate_metrics_charts_html(cluster_id, infra_id)
-    metrics_html += '</div>\n'  # Close container
-    metrics_html += generate_html_footer()
+    # === METRICS PAGES ===
+    # CPU & Memory Metrics Page
+    metrics_cpu_html = generate_html_header(f"CPU & Memory Metrics - {cluster_name}")
+    metrics_cpu_html += get_header_html("CPU & Memory Metrics")
+    metrics_cpu_html += generate_navigation("metrics-cpu-memory")
+    metrics_cpu_html += generate_metrics_charts_html(cluster_id, infra_id, "cpu-memory")
+    metrics_cpu_html += '</div>\n'  # Close container
+    metrics_cpu_html += generate_html_footer()
 
-    # Write metrics.html
-    with open(results_dir / "metrics.html", 'w') as f:
-        f.write(metrics_html)
+    with open(results_dir / "metrics-cpu-memory.html", 'w') as f:
+        f.write(metrics_cpu_html)
+
+    # EBS Metrics Page
+    metrics_ebs_html = generate_html_header(f"EBS Metrics - {cluster_name}")
+    metrics_ebs_html += get_header_html("EBS Metrics")
+    metrics_ebs_html += generate_navigation("metrics-ebs")
+    metrics_ebs_html += generate_metrics_charts_html(cluster_id, infra_id, "ebs")
+    metrics_ebs_html += '</div>\n'  # Close container
+    metrics_ebs_html += generate_html_footer()
+
+    with open(results_dir / "metrics-ebs.html", 'w') as f:
+        f.write(metrics_ebs_html)
+
+    # Network Metrics Page
+    metrics_network_html = generate_html_header(f"Network Metrics - {cluster_name}")
+    metrics_network_html += get_header_html("Network Metrics")
+    metrics_network_html += generate_navigation("metrics-network")
+    metrics_network_html += generate_metrics_charts_html(cluster_id, infra_id, "network")
+    metrics_network_html += '</div>\n'  # Close container
+    metrics_network_html += generate_html_footer()
+
+    with open(results_dir / "metrics-network.html", 'w') as f:
+        f.write(metrics_network_html)
 
     # === CLOUDTRAIL PAGE ===
     cloudtrail_html = generate_html_header(f"CloudTrail Events - {cluster_name}")
@@ -3819,22 +3696,107 @@ def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
     details_html += get_header_html("Detailed Check Results")
     details_html += generate_navigation("details")
 
-    # Add detailed results
-    for category, (status, issues) in results.items():
+    # Add detailed results with table format showing ALL checks
+    for category, result_data in results.items():
         category_name = category.replace('_', ' ').title()
+        category_anchor = category.replace('_', '-')
+
+        # Get status and checks
+        if isinstance(result_data, CategoryCheckResults):
+            status = result_data.get_status()
+            all_checks = result_data.checks
+        else:
+            # Should not happen since we replace with CategoryCheckResults, but handle gracefully
+            status, issues = result_data
+            all_checks = []
+
         status_class = f"status-{status.lower()}"
 
-        details_html += '<div class="card">\n'
+        details_html += f'<div class="card" id="{category_anchor}">\n'
         details_html += f'<h2>{category_name} <span class="status-badge {status_class}">{status}</span></h2>\n'
 
-        if issues:
-            details_html += '<ul class="issue-list">\n'
-            for issue in issues:
-                issue_class = "warning" if "WARNING" in issue else ""
-                details_html += f'    <li class="{issue_class}">{issue}</li>\n'
-            details_html += '</ul>\n'
+        if all_checks:
+            # Check if this is security_groups category (has special metadata)
+            is_sg_category = category == 'security_groups' and all_checks and 'protocol' in all_checks[0].metadata
+
+            if is_sg_category:
+                # Special table format for security groups with traffic flow columns
+                details_html += '<table class="check-table">\n'
+                details_html += '<thead><tr><th>Description</th><th>Protocol</th><th>Direction</th><th>Port Range</th><th>Allowed By</th><th>Status</th></tr></thead>\n'
+                details_html += '<tbody>\n'
+
+                for check in all_checks:
+                    # Determine CSS class based on result
+                    if check.result == 'PASS' or check.result == 'OK':
+                        check_class = "check-pass"
+                        result_display = "PASS"
+                    elif check.result == 'WARNING':
+                        check_class = "check-warning"
+                        result_display = "WARNING"
+                    else:  # FAIL or ERROR
+                        check_class = "check-fail"
+                        result_display = check.result
+
+                    protocol = check.metadata.get('protocol', '—')
+                    direction = check.metadata.get('direction', '—')
+                    port_range = check.metadata.get('port_range', '—')
+                    allowed_by = check.metadata.get('allowed_by', '—')
+
+                    details_html += f'<tr>\n'
+                    details_html += f'    <td>{check.description}</td>\n'
+                    details_html += f'    <td><code>{protocol}</code></td>\n'
+                    details_html += f'    <td>{direction}</td>\n'
+                    details_html += f'    <td><code>{port_range}</code></td>\n'
+                    details_html += f'    <td style="font-size: 0.85em;">{allowed_by}</td>\n'
+                    details_html += f'    <td><span class="{check_class}">{result_display}</span></td>\n'
+                    details_html += f'</tr>\n'
+
+                details_html += '</tbody>\n'
+                details_html += '</table>\n'
+            else:
+                # Standard table format for other categories
+                details_html += '<table class="check-table">\n'
+                details_html += '<thead><tr><th>Check Description</th><th>Result</th><th>Details</th></tr></thead>\n'
+                details_html += '<tbody>\n'
+
+                check_num = 0
+                for check in all_checks:
+                    check_num += 1
+
+                    # Determine CSS class based on result
+                    if check.result == 'PASS' or check.result == 'OK':
+                        check_class = "check-pass"
+                        result_display = "PASS"
+                    elif check.result == 'WARNING':
+                        check_class = "check-warning"
+                        result_display = "WARNING"
+                    else:  # FAIL or ERROR
+                        check_class = "check-fail"
+                        result_display = check.result
+
+                    details_html += f'<tr>\n'
+                    details_html += f'    <td>{check.description}</td>\n'
+                    details_html += f'    <td><span class="{check_class}">{result_display}</span></td>\n'
+                    details_html += f'    <td>\n'
+
+                    # Only add collapsible details if there are details to show
+                    if check.details:
+                        details_html += f'        <button class="collapsible">View Details</button>\n'
+                        details_html += f'        <div class="collapsible-content">\n'
+                        details_html += f'            <p>{check.details}</p>\n'
+                        details_html += f'        </div>\n'
+                    else:
+                        details_html += f'        <span style="color: #6c757d;">—</span>\n'
+
+                    details_html += f'    </td>\n'
+                    details_html += f'</tr>\n'
+
+                details_html += '</tbody>\n'
+                details_html += '</table>\n'
         else:
-            details_html += '<p style="color: #28a745;">✓ All checks passed</p>\n'
+            details_html += '<p style="color: #28a745; font-size: 1.1em; padding: 20px; text-align: center;">\n'
+            details_html += '✓ No checks were recorded for this category\n'
+            details_html += '</p>\n'
 
         details_html += '</div>\n'
 
@@ -4365,35 +4327,56 @@ Notes:
     print(f"{Colors.BOLD}Timestamp: {datetime.now(timezone.utc).isoformat()}{Colors.END}")
 
     # Run all health checks
+    global current_check_category, all_check_results
     results = {}
+    all_check_results = {}  # Reset global check results
 
     # Check installation status first (most important)
+    current_check_category = 'installation_status'
     results['installation_status'] = check_installation_status(cluster_id, infra_id)
 
     # Check cluster context (network config, Jira issues)
+    current_check_category = 'cluster_context'
     results['cluster_context'] = check_cluster_context(cluster_id, infra_id)
 
     # Check VPC DNS attributes (required for Route53 private zones)
+    current_check_category = 'vpc_dns_attributes'
     results['vpc_dns_attributes'] = check_vpc_dns_attributes(cluster_id, infra_id)
 
     # Check DHCP Options (Kubernetes/OpenShift compatibility)
+    current_check_category = 'dhcp_options'
     results['dhcp_options'] = check_dhcp_options(cluster_id, infra_id)
 
     # Check VPC Endpoint Service (PrivateLink clusters only)
+    current_check_category = 'vpc_endpoint_service'
     results['vpc_endpoint_service'] = check_vpc_endpoint_service(cluster_id, infra_id)
 
     # Check security groups (includes API endpoint and security group configuration mismatch)
+    current_check_category = 'security_groups'
     results['security_groups'] = check_security_groups(cluster_id, infra_id)
+
+    current_check_category = 'instances'
     results['instances'] = check_instances(cluster_id, infra_id)
+
+    current_check_category = 'load_balancers'
     results['load_balancers'] = check_load_balancers(cluster_id, infra_id)
+
+    current_check_category = 'route53'
     results['route53'] = check_route53(cluster_id)
+
+    current_check_category = 'cloudtrail'
     results['cloudtrail'] = check_cloudtrail_logs(cluster_id, infra_id)
 
     # Check EC2 CloudWatch metrics for resource exhaustion
+    current_check_category = 'ec2_metrics'
     results['ec2_metrics'] = check_ec2_metrics(cluster_id, infra_id)
 
     # Check EC2 console logs for errors
+    current_check_category = 'ec2_console_logs'
     results['ec2_console_logs'] = check_ec2_console_logs(cluster_id, infra_id)
+
+    # Done with checks, clear current category
+    current_check_category = None
 
     # Summary (terminal output only - HTML report is generated in write_html_report)
     print(f"\n{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}")
@@ -4401,10 +4384,12 @@ Notes:
     print(f"{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}\n")
 
     all_ok = True
-    for category, (status, issues) in results.items():
-        category_name = category.replace('_', ' ').title()
-    #    print(f"\n{Colors.BOLD}{category_name}:{Colors.END}")
-    #    print_status(status, f"{len(issues)} issue(s) found" if issues else "All checks passed")
+    for category, result_data in results.items():
+        if isinstance(result_data, CategoryCheckResults):
+            status = result_data.get_status()
+        else:
+            status, _ = result_data
+
         if status != "OK":
             all_ok = False
 

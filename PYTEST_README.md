@@ -216,7 +216,7 @@ Failures are mostly related to:
 
 ## Data Collection
 
-This tool expects cluster data to be collected using the companion `get_install_artifacts.py` script. Required files:
+This tool expects cluster data to be collected using the companion `get_install_artifacts.py` script (Python version recommended, bash version `get_install_artifacts.sh` also available). Required files:
 
 - `<cluster-id>_cluster.json` - Core cluster configuration
 - `<cluster-id>_security_groups.json` - Security group rules

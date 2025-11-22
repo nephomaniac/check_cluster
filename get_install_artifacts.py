@@ -298,6 +298,7 @@ class AWSCollector:
 
         self.ec2 = session.client('ec2', region_name=self.region, **client_kwargs)
         self.elbv2 = session.client('elbv2', region_name=self.region, **client_kwargs)
+        self.elb = session.client('elb', region_name=self.region, **client_kwargs)
         self.route53 = session.client('route53', **client_kwargs)
         self.cloudtrail = session.client('cloudtrail', region_name=self.region, **client_kwargs)
         self.cloudwatch = session.client('cloudwatch', region_name=self.region, **client_kwargs)
@@ -797,6 +798,161 @@ class AWSCollector:
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'describe VPC endpoint connections')
 
+    def describe_subnets(self, filters: List[Dict] = None, subnet_ids: List[str] = None) -> Dict:
+        """Describe subnets"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+        if subnet_ids:
+            params['SubnetIds'] = subnet_ids
+
+        print(format_aws_cli_command('ec2', 'describe-subnets', params))
+        try:
+            return self.ec2.describe_subnets(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe subnets')
+
+    def describe_route_tables(self, filters: List[Dict] = None) -> Dict:
+        """Describe route tables"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-route-tables', params))
+        try:
+            return self.ec2.describe_route_tables(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe route tables')
+
+    def describe_internet_gateways(self, filters: List[Dict] = None) -> Dict:
+        """Describe internet gateways"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-internet-gateways', params))
+        try:
+            return self.ec2.describe_internet_gateways(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe internet gateways')
+
+    def describe_nat_gateways(self, filters: List[Dict] = None) -> Dict:
+        """Describe NAT gateways"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-nat-gateways', params))
+        try:
+            return self.ec2.describe_nat_gateways(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe NAT gateways')
+
+    def describe_target_groups(self, load_balancer_arn: str = None) -> Dict:
+        """Describe target groups"""
+        params = {}
+        if load_balancer_arn:
+            params['LoadBalancerArn'] = load_balancer_arn
+
+        print(format_aws_cli_command('elbv2', 'describe-target-groups', params))
+        try:
+            return self.elbv2.describe_target_groups(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe target groups')
+
+    def describe_target_health(self, target_group_arn: str) -> Dict:
+        """Describe target health"""
+        params = {'TargetGroupArn': target_group_arn}
+        print(format_aws_cli_command('elbv2', 'describe-target-health', params))
+        try:
+            return self.elbv2.describe_target_health(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe target health')
+
+    def describe_classic_load_balancers(self, load_balancer_names: List[str] = None) -> Dict:
+        """Describe classic load balancers"""
+        params = {}
+        if load_balancer_names:
+            params['LoadBalancerNames'] = load_balancer_names
+
+        print(format_aws_cli_command('elb', 'describe-load-balancers', params))
+        try:
+            return self.elb.describe_load_balancers(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe classic load balancers')
+
+    def describe_network_interfaces(self, filters: List[Dict] = None) -> Dict:
+        """Describe network interfaces"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-network-interfaces', params))
+        try:
+            return self.ec2.describe_network_interfaces(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe network interfaces')
+
+    def describe_volumes(self, filters: List[Dict] = None) -> Dict:
+        """Describe EBS volumes"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-volumes', params))
+        try:
+            return self.ec2.describe_volumes(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe EBS volumes')
+
+    def describe_network_acls(self, filters: List[Dict] = None) -> Dict:
+        """Describe network ACLs"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-network-acls', params))
+        try:
+            return self.ec2.describe_network_acls(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe network ACLs')
+
+    def describe_addresses(self, filters: List[Dict] = None) -> Dict:
+        """Describe elastic IPs"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-addresses', params))
+        try:
+            return self.ec2.describe_addresses(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe elastic IPs')
+
+    def describe_vpc_peering_connections(self, filters: List[Dict] = None) -> Dict:
+        """Describe VPC peering connections"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-vpc-peering-connections', params))
+        try:
+            return self.ec2.describe_vpc_peering_connections(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPC peering connections')
+
+    def describe_flow_logs(self, filters: List[Dict] = None) -> Dict:
+        """Describe VPC flow logs"""
+        params = {}
+        if filters:
+            params['Filters'] = filters
+
+        print(format_aws_cli_command('ec2', 'describe-flow-logs', params))
+        try:
+            return self.ec2.describe_flow_logs(**params)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'describe VPC flow logs')
+
 
 class ClusterDataCollector:
     """Main collector class for ROSA cluster artifacts"""
@@ -851,6 +1007,7 @@ class ClusterDataCollector:
 
         # Get AWS resources
         self._get_vpc_info()
+        self._get_network_infrastructure()
         self._get_vpc_endpoint_service_info()
         self._get_ec2_instance_info()
         self._get_cloud_trail_logs()
@@ -1261,6 +1418,160 @@ class ClusterDataCollector:
                         except Exception as e:
                             Colors.perr(f"Failed to fetch vpc endpoint connections for: {service_id}: {str(e)}")
 
+    def _get_network_infrastructure(self):
+        """Fetch network infrastructure: subnets, route tables, gateways"""
+        Colors.hdr("Getting network infrastructure")
+
+        # Subnets
+        subnets_file = f"{self.file_prefix}_subnets.json"
+        if Path(subnets_file).exists():
+            Colors.green(f"Using existing subnets file: {subnets_file}")
+        else:
+            Colors.blue("Fetching subnets from AWS...")
+            try:
+                response = self.aws.describe_subnets(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(subnets_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch subnets: {str(e)}")
+
+        # Route Tables
+        route_tables_file = f"{self.file_prefix}_route_tables.json"
+        if Path(route_tables_file).exists():
+            Colors.green(f"Using existing route tables file: {route_tables_file}")
+        else:
+            Colors.blue("Fetching route tables from AWS...")
+            try:
+                response = self.aws.describe_route_tables(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(route_tables_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch route tables: {str(e)}")
+
+        # Internet Gateways
+        igw_file = f"{self.file_prefix}_internet_gateways.json"
+        if Path(igw_file).exists():
+            Colors.green(f"Using existing internet gateways file: {igw_file}")
+        else:
+            Colors.blue("Fetching internet gateways from AWS...")
+            try:
+                response = self.aws.describe_internet_gateways(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(igw_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch internet gateways: {str(e)}")
+
+        # NAT Gateways
+        nat_file = f"{self.file_prefix}_nat_gateways.json"
+        if Path(nat_file).exists():
+            Colors.green(f"Using existing NAT gateways file: {nat_file}")
+        else:
+            Colors.blue("Fetching NAT gateways from AWS...")
+            try:
+                response = self.aws.describe_nat_gateways(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(nat_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch NAT gateways: {str(e)}")
+
+        # Network Interfaces
+        eni_file = f"{self.file_prefix}_network_interfaces.json"
+        if Path(eni_file).exists():
+            Colors.green(f"Using existing network interfaces file: {eni_file}")
+        else:
+            Colors.blue("Fetching network interfaces from AWS...")
+            try:
+                response = self.aws.describe_network_interfaces(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(eni_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch network interfaces: {str(e)}")
+
+        # Network ACLs
+        nacl_file = f"{self.file_prefix}_network_acls.json"
+        if Path(nacl_file).exists():
+            Colors.green(f"Using existing network ACLs file: {nacl_file}")
+        else:
+            Colors.blue("Fetching network ACLs from AWS...")
+            try:
+                response = self.aws.describe_network_acls(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(nacl_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch network ACLs: {str(e)}")
+
+        # Elastic IPs
+        eip_file = f"{self.file_prefix}_elastic_ips.json"
+        if Path(eip_file).exists():
+            Colors.green(f"Using existing elastic IPs file: {eip_file}")
+        else:
+            Colors.blue("Fetching elastic IPs from AWS...")
+            try:
+                response = self.aws.describe_addresses(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(eip_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch elastic IPs: {str(e)}")
+
+        # VPC Peering Connections
+        peering_file = f"{self.file_prefix}_vpc_peering.json"
+        if Path(peering_file).exists():
+            Colors.green(f"Using existing VPC peering file: {peering_file}")
+        else:
+            Colors.blue("Fetching VPC peering connections from AWS...")
+            try:
+                response = self.aws.describe_vpc_peering_connections(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(peering_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch VPC peering connections: {str(e)}")
+
+        # VPC Flow Logs
+        flowlogs_file = f"{self.file_prefix}_vpc_flow_logs.json"
+        if Path(flowlogs_file).exists():
+            Colors.green(f"Using existing VPC flow logs file: {flowlogs_file}")
+        else:
+            Colors.blue("Fetching VPC flow logs from AWS...")
+            try:
+                response = self.aws.describe_flow_logs(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(flowlogs_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch VPC flow logs: {str(e)}")
+
+        # EBS Volumes
+        volumes_file = f"{self.file_prefix}_ebs_volumes.json"
+        if Path(volumes_file).exists():
+            Colors.green(f"Using existing EBS volumes file: {volumes_file}")
+        else:
+            Colors.blue("Fetching EBS volumes from AWS...")
+            try:
+                response = self.aws.describe_volumes(
+                    filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+                )
+                with open(volumes_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch EBS volumes: {str(e)}")
+
     def _get_ec2_instance_info(self):
         """Fetch EC2 instance information, metrics, and console logs"""
         Colors.hdr("Getting EC2 instance information")
@@ -1564,6 +1875,57 @@ Iterating over LBs found in {lb_all_file} to get tag associations...
                                 if 'role' in tag.get('Key', ''):
                                     Colors.green(f"  LB Kub Role: 'Kub role: {tag['Value']}'")
                         printline()
+
+        # Get Target Groups for ELBv2
+        Colors.blue("Fetching target groups for load balancers...")
+        target_groups_file = f"{self.file_prefix}_target_groups.json"
+        if Path(target_groups_file).exists():
+            Colors.green(f"Using existing target groups file: {target_groups_file}")
+        else:
+            try:
+                response = self.aws.describe_target_groups()
+                with open(target_groups_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch target groups: {str(e)}")
+
+        # Get Target Health for each target group
+        if Path(target_groups_file).exists():
+            with open(target_groups_file) as f:
+                tg_data = json.load(f)
+
+            for tg in tg_data.get('TargetGroups', []):
+                tg_arn = tg.get('TargetGroupArn')
+                tg_name = tg.get('TargetGroupName', 'unknown')
+
+                # Check if target group belongs to cluster
+                if self.infra_id not in tg_name:
+                    continue
+
+                tg_health_file = f"{self.file_prefix}_{tg_name}_target_health.json"
+                if Path(tg_health_file).exists():
+                    Colors.green(f"Using existing target health file: {tg_health_file}")
+                else:
+                    Colors.blue(f"Fetching target health for: {tg_name}")
+                    try:
+                        response = self.aws.describe_target_health(tg_arn)
+                        with open(tg_health_file, 'w') as f:
+                            json.dump(response, f, indent=2, default=str)
+                    except Exception as e:
+                        Colors.perr(f"Failed to fetch target health for {tg_name}: {str(e)}")
+
+        # Get Classic Load Balancers (ELB)
+        Colors.blue("Fetching classic load balancers...")
+        classic_lb_file = f"{self.file_prefix}_classic_load_balancers.json"
+        if Path(classic_lb_file).exists():
+            Colors.green(f"Using existing classic load balancers file: {classic_lb_file}")
+        else:
+            try:
+                response = self.aws.describe_classic_load_balancers()
+                with open(classic_lb_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch classic load balancers: {str(e)}")
 
     def _write_runtime_config(self):
         """Write runtime configuration to last_run.json"""
