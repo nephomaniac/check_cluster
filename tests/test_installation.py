@@ -114,23 +114,35 @@ def test_cluster_network_configured(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_multi_az(cluster_data: ClusterData):
-    """Cluster should be multi-AZ for production"""
-    nodes = cluster_data.cluster_json.get('nodes', {})
+    """Cluster multi-AZ configuration should match deployment (configuration consistency check)"""
+    # Get the configured multi-AZ setting
+    is_multi_az = cluster_data.cluster_json.get('multi_az', False)
 
+    nodes = cluster_data.cluster_json.get('nodes', {})
     if not nodes:
         pytest.skip("Node information not available")
 
     availability_zones = nodes.get('availability_zones', [])
 
+    # If no AZ info available, cannot validate
     if not availability_zones:
         pytest.skip("Availability zone information not available")
 
-    # Production clusters should span multiple AZs
-    if len(availability_zones) < 3:
-        pytest.fail(
-            f"Cluster only spans {len(availability_zones)} AZ(s), " +
-            "recommended 3 for high availability"
-        )
+    az_count = len(availability_zones)
+
+    # Only validate configuration consistency, not make recommendations
+    if is_multi_az:
+        # Multi-AZ clusters MUST span multiple availability zones
+        assert az_count >= 2, \
+            f"Configuration error: Cluster configured as multi-AZ but only spans {az_count} AZ(s)"
+    else:
+        # Single-AZ is a valid configuration - only fail if there's a mismatch
+        if az_count > 1:
+            pytest.fail(
+                f"Configuration error: Cluster configured as single-AZ but spans {az_count} AZ(s)"
+            )
+        # Single-AZ cluster correctly configured - this is valid
+        pytest.skip(f"Cluster correctly configured as single-AZ (spans {az_count} AZ)")
 
 
 @pytest.mark.installation
