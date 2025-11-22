@@ -6,10 +6,13 @@ Automated data collection and health validation tools for Red Hat OpenShift Serv
 
 This repository contains two complementary tools for ROSA cluster troubleshooting and analysis:
 
-1. **`get_install_artifacts.py`** / **`get_install_artifacts.sh`** - Data collection scripts (Python and Bash versions)
+1. **`get_install_artifacts.py`** - Python-based data collection script using boto3
 2. **`check_cluster_artifacts.py`** - Health validation and analysis script with interactive HTML reports
+3. **`run_tests.py`** - Modern pytest-based health check framework with interactive HTML reporting
 
 Together, these tools provide comprehensive cluster diagnostics for installation failures, networking issues, and post-mortem analysis.
+
+**Note**: A bash version `get_install_artifacts.sh` is also available for environments without Python, but the Python version is recommended for better error handling and additional features.
 
 ---
 
@@ -75,94 +78,61 @@ uv run check_cluster_artifacts.py -d .
 eval $(ocm backplane cloud credentials <cluster-id> -o env)
 
 # 2. Collect cluster data
-# Python version (recommended):
 python3 get_install_artifacts.py -c <cluster-id>
 
-# OR: Bash version (also available):
-./get_install_artifacts.sh -c <cluster-id>
-
 # 3. Run health check analysis
-# New pytest-based tool:
+# New pytest-based tool (recommended):
 python3 run_tests.py --cluster-dir /path/to/cluster/data
 
-# OR: Legacy script:
+# OR: Legacy monolithic script:
 python3 check_cluster_artifacts.py -d /path/to/cluster/data
 ```
 
 ---
 
-## Tool 1: get_install_artifacts.sh
+## Tool 1: get_install_artifacts.py (Python Version - Recommended)
 
 ### Purpose
 
-Automated data collection script that gathers comprehensive AWS infrastructure and OpenShift cluster installation artifacts.
+Automated data collection script using boto3 for AWS API calls. Gathers comprehensive AWS infrastructure and OpenShift cluster installation artifacts with better error handling and extensibility than the bash version.
 
 ### What It Collects
 
-- **OCM cluster metadata** (`cluster.json`, `resources.json`)
+**Core Resources:**
+- **OCM cluster metadata** (`cluster.json`, `resources.json`, `cluster_context.json`)
 - **VPC details and DNS attributes** (`vpc-*.json`, DNS attribute files)
 - **DHCP Options Sets** (`dhcp_*.json`)
 - **VPC Endpoint Services** (PrivateLink clusters)
 - **EC2 instances and console logs** (`ec2_instances.json`, console logs)
-- **Load Balancers** (`LB_*.json`)
-- **Route53 DNS records** (API and apps record sets)
 - **Security Groups** (`security_groups.json`)
-- **CloudTrail audit logs** (2-hour window from cluster creation)
+- **CloudTrail audit logs** (configurable time window, default 2 hours)
 
-### Usage
+**Network Infrastructure (New):**
+- **Subnets** (overall and per-zone for multi-AZ)
+- **Route Tables** (IGW and NAT routes)
+- **Internet Gateways** (public cluster connectivity)
+- **NAT Gateways** (overall and per-zone for multi-AZ)
+- **Network Interfaces** (ENI details)
+- **Network ACLs** (additional filtering layer)
+- **Elastic IPs** (NAT and LB public IPs)
+- **VPC Peering Connections**
+- **VPC Flow Logs**
 
-```bash
-# Display help
-./get_install_artifacts.sh --help
+**Load Balancers:**
+- **Application Load Balancers (ALBv2)** with tags
+- **Classic Load Balancers (ELB)**
+- **Target Groups** (backend configuration)
+- **Target Health** (per target group health checks)
 
-# Collect data for a cluster
-./get_install_artifacts.sh -c <clusterid>
-```
+**Storage & DNS:**
+- **EBS Volumes** (overall and per-zone for multi-AZ)
+- **Route53 Hosted Zones** (private and public)
+- **Route53 Record Sets** (API and apps DNS)
 
-### Options
+**Multi-AZ Support:**
+- When `multi_az=true`, collects zone-specific artifacts for each availability zone
 
-- `-c, --cluster <cluster-id>` - Specify cluster ID to collect data for
-- `-h, --help` - Display help message
-
-### Prerequisites
-
-- `ocm` CLI (authenticated)
-- `aws` CLI v2
-- Valid AWS credentials: `eval $(ocm backplane cloud credentials <cluster-id> -o env)`
-- Required tools: `jq`, `python3`, `gdate` (macOS: `brew install coreutils`)
-
-### Output Files
-
-All files created in current directory with naming pattern:
-```
-{cluster_id}_{resource_type}.json
-{cluster_id}_{resource_id}_{resource_type}.json
-```
-
-Examples:
-```
-<clusterid>_cluster.json
-<clusterid>_vpc-0c103a233aa875f9b_VPC.json
-<clusterid>_ec2_instances.json
-<clusterid>_cloudtrail.json
-```
-
-### Features
-
-- **Idempotent** - Safe to run multiple times
-- **Efficient** - Reuses existing files (no redundant API calls)
-- **Self-documenting** - Echoes all commands before execution
-- **Error-tolerant** - Continues on individual failures
-
----
-
-## Tool 1b: get_install_artifacts.py (Python Version)
-
-### Purpose
-
-Python implementation of the data collection script using boto3 for AWS API calls. Provides the same functionality as the Bash version with better structure and error handling.
-
-### Key Differences from Bash Version
+### Key Advantages Over Bash Version
 
 - **Uses boto3** for AWS operations instead of AWS CLI
 - **Prints AWS CLI equivalents** before each boto3 call for transparency
@@ -194,13 +164,13 @@ uv run get_install_artifacts.py -c <cluster-id> --force-update
 
 ### Options
 
-All options are the same as the Bash version:
 - `-c, --cluster <cluster-id>` - ROSA cluster ID (required)
 - `-d, --dir <directory>` - Working directory (default: current directory)
 - `-s, --start <date>` - Start date (YYYY-MM-DDTHH:MM:SSZ)
 - `-e, --elapsed <time>` - Time window (e.g., "3h", "2days", "30m")
 - `-p, --period <seconds>` - CloudWatch metrics period (default: 300)
 - `-f, --force-update` - Force recalculation of time range
+- `--debug` - Enable debug output (proxy config, AWS commands, etc.)
 - `-h, --help` - Display help message
 
 ### Prerequisites
@@ -392,18 +362,17 @@ eval $(ocm backplane cloud credentials <cluster-id> -o env)
 # Step 4: Collect cluster data
 mkdir -p ~/troubleshooting/<cluster-name>
 cd ~/troubleshooting/<cluster-name>
-/path/to/get_install_artifacts.sh -c <cluster-id>
+python3 /path/to/get_install_artifacts.py -c <cluster-id>
 
 # Step 5: Run health check (two options)
 
-# Option A: Run from cluster data directory
-python3 /path/to/check_aws_health.py
+# Option A: New pytest-based framework (recommended)
+python3 /path/to/run_tests.py --cluster-dir .
+# View interactive HTML report: open test_report.html
 
-# Option B: Run from anywhere with directory argument
-python3 /path/to/check_aws_health.py -d ~/troubleshooting/<cluster-name>
-
-# Step 6: Review results
-cat results_*.md
+# Option B: Legacy monolithic script
+python3 /path/to/check_cluster_artifacts.py
+# View markdown report: cat results_*.md
 ```
 
 ### Failed Installation Workflow
@@ -411,19 +380,19 @@ cat results_*.md
 ```bash
 # 1. Collect data immediately after failure
 eval $(ocm backplane cloud credentials <cluster-id> -o env)
-./get_install_artifacts.sh -c <cluster-id>
+python3 get_install_artifacts.py -c <cluster-id>
 
 # 2. Run automated health check
-python3 check_aws_health.py
+python3 run_tests.py --cluster-dir .
 
-# 3. Check for critical issues
-grep "ERROR" results_*.md
+# 3. View interactive HTML report
+open test_report.html
 
-# 4. Analyze CloudTrail events
-grep "Cluster-Impacting" results_*.md
-
-# 5. Review bootstrap instance logs
+# 4. Review bootstrap instance logs
 cat <cluster-id>_i-*_console.log | grep -i error
+
+# 5. Check CloudTrail events JSON
+cat <cluster-id>_*.cloudtrail.json | jq '.[] | select(.EventName | contains("Revoke", "Delete", "Terminate"))'
 ```
 
 ---
@@ -489,13 +458,17 @@ Beyond the legacy checks, `get_install_artifacts.py` now collects comprehensive 
 
 ### Available Documentation Files
 
-- **`README.md`** (this file) - Overview and quick start
-- **`get_install_artifacts_SUMMARY.md`** - Detailed get_install_artifacts.sh documentation
-- **`get_install_artifacts_UPDATES.md`** - Recent updates and changes to get_install_artifacts.sh
+- **`README.md`** (this file) - Overview and quick start for data collection tools
+- **`PYTEST_README.md`** - Comprehensive pytest-based health check framework documentation
+- **`get_install_artifacts_SUMMARY.md`** - Legacy bash script documentation (deprecated)
+- **`get_install_artifacts_UPDATES.md`** - Legacy bash script updates (deprecated)
 
-### Future Documentation
+### Implementation Details
 
-See individual validation functions in `check_aws_health.py` for detailed implementation notes and validation logic.
+- See `get_install_artifacts.py` docstrings for data collection implementation details
+- See individual test modules in `tests/` directory for validation logic
+- See `reporters/html_generator.py` for HTML report generation
+- See `models/cluster.py` for cluster data model structure
 
 ---
 
@@ -525,15 +498,15 @@ CloudTrail logs show all API calls during cluster creation for security and comp
 
 ### System Requirements
 - macOS or Linux
-- Bash 4.0+
-- Python 3.7+
+- Python 3.8+ (for get_install_artifacts.py and run_tests.py)
+- Bash 4.0+ (optional, only for legacy get_install_artifacts.sh)
 
 ### CLI Tools
-- `ocm` - OpenShift Cluster Manager CLI
-- `aws` - AWS CLI v2
-- `jq` - JSON processor
+- `ocm` - OpenShift Cluster Manager CLI (required)
+- `aws` - AWS CLI v2 (optional, only for manual queries)
+- `jq` - JSON processor (recommended for manual data analysis)
 - `python3` - Python 3 interpreter
-- `gdate` - GNU date (macOS: `brew install coreutils`)
+- `pytest` - Python testing framework (install via `uv pip install pytest pytest-json-report`)
 
 ### AWS Permissions
 
@@ -560,10 +533,10 @@ CloudTrail logs show all API calls during cluster creation for security and comp
 
 ## Troubleshooting
 
-### Issue: "missing cluster id?"
+### Issue: "missing cluster id?" or "Cluster ID is required"
 **Solution**: Use `-c` or `--cluster` flag:
 ```bash
-./get_install_artifacts.sh -c <cluster-id>
+python3 get_install_artifacts.py -c <cluster-id>
 ```
 
 ### Issue: "Failed to get cluster from ocm?"
@@ -572,19 +545,33 @@ CloudTrail logs show all API calls during cluster creation for security and comp
 2. Verify cluster ID: `ocm list clusters`
 3. Check permissions
 
-### Issue: AWS API errors
+### Issue: AWS API errors or "UnauthorizedOperation"
 **Solutions**:
 1. Refresh credentials: `eval $(ocm backplane cloud credentials <cluster-id> -o env)`
 2. Verify credentials: `aws sts get-caller-identity`
-3. Check AWS permissions
+3. Check AWS permissions (see AWS Permissions section above)
+4. Enable debug mode: `python3 get_install_artifacts.py -c <cluster-id> --debug`
 
-### Issue: "No cluster files found"
-**Solution**: Run `get_install_artifacts.sh` first to collect data files
-
-### Issue: Missing DHCP/VPC endpoint data
-**Solution**: The script will provide AWS CLI commands to collect missing data:
+### Issue: "No cluster files found" (pytest tests)
+**Solution**: Run `get_install_artifacts.py` first to collect data files:
 ```bash
-aws ec2 describe-dhcp-options --dhcp-options-ids <dhcp-id> > <file>
+python3 get_install_artifacts.py -c <cluster-id>
+```
+
+### Issue: Missing boto3 module
+**Solution**: Install Python dependencies:
+```bash
+uv pip install -r requirements.txt
+# or
+pip install boto3
+```
+
+### Issue: Proxy or SSL certificate errors
+**Solution**: Configure proxy settings in `~/.aws/config`:
+```ini
+[default]
+https_proxy = http://proxy.example.com:8080
+ca_bundle = /path/to/ca-bundle.crt
 ```
 
 ---
@@ -622,14 +609,45 @@ To add a new validation to `check_aws_health.py`:
    full_markdown.append("X. [New Resource Health Check](#new-resource-health-check)\n")
    ```
 
-### Adding Data Collection to get_install_artifacts.sh
+### Adding Data Collection to get_install_artifacts.py
 
 To collect new AWS resources:
 
-1. Add AWS CLI command in appropriate section
-2. Save to file with naming pattern: `{cluster_id}_{resource_type}.json`
-3. Check for existing file before fetching (idempotent)
-4. Update documentation
+1. Add a new `describe_*` method to the `AWSCollector` class:
+   ```python
+   def describe_new_resource(self, filters: List[Dict] = None) -> Dict:
+       """Describe new resource"""
+       params = {}
+       if filters:
+           params['Filters'] = filters
+
+       print(format_aws_cli_command('ec2', 'describe-new-resource', params))
+       try:
+           return self.ec2.describe_new_resource(**params)
+       except (self.ClientError, self.BotoCoreError) as e:
+           self._handle_aws_error(e, 'describe new resource')
+   ```
+
+2. Add collection logic to `ClusterDataCollector` (e.g., in `_get_network_infrastructure()`):
+   ```python
+   new_resource_file = f"{self.file_prefix}_new_resource.json"
+   if Path(new_resource_file).exists():
+       Colors.green(f"Using existing file: {new_resource_file}")
+   else:
+       Colors.blue("Fetching new resource from AWS...")
+       try:
+           response = self.aws.describe_new_resource(
+               filters=[{'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}]
+           )
+           with open(new_resource_file, 'w') as f:
+               json.dump(response, f, indent=2, default=str)
+       except Exception as e:
+           Colors.perr(f"Failed to fetch new resource: {str(e)}")
+   ```
+
+3. File naming pattern: `{cluster_id}_{resource_type}.json`
+4. Always check for existing file before fetching (idempotent)
+5. Update README.md Integration section and PYTEST_README.md
 
 ---
 
@@ -649,29 +667,32 @@ For issues, questions, or contributions:
 
 ## Version History
 
-### Current Version (2025-11-20)
-- **NEW**: Added directory argument (`-d/--directory`) to check_aws_health.py
-  - Run health checks from any directory
-  - Specify source directory for cluster data files
-  - Maintains backward compatibility (default: current directory)
-- Added cluster_context.json integration
-  - Network configuration validation
-  - Jira issues tracking
-  - Handover announcements display
-  - Support exceptions and PD alerts monitoring
-- Added VPC DNS attributes validation
-- Added DHCP Options validation
-- Added VPC Endpoint Service validation (PrivateLink)
-- Added argument parsing to get_install_artifacts.sh
-- Added comprehensive help functionality
-- Added CloudTrail event correlation with resource-specific filtering
-- Enhanced security group validation with public/private mismatch detection
+### v2.0.0 (2025-11-21) - Pytest Framework & Enhanced Collection
+- **NEW**: Pytest-based health check framework
+  - 63 individual tests across 7 categories
+  - Session-scoped fixtures for efficient data loading
+  - Interactive HTML report generation
+  - Modular test organization (separate files per category)
+  - See PYTEST_README.md for details
 
-### Previous Features
-- Initial release with basic health checks
+- **Enhanced Data Collection** (get_install_artifacts.py):
+  - Added 13 new AWS resource types (subnets, route tables, NAT gateways, target groups, etc.)
+  - Multi-AZ zone-specific artifact collection
+  - Automatic time range reuse from last_run.json
+  - Proxy and CA bundle support from ~/.aws/config
+  - Debug mode with detailed credential information
+  - AWS CLI command printing before each boto3 call
+
+- **Improved Validation**:
+  - Directory argument for check_cluster_artifacts.py
+  - Cluster context integration (network config, Jira issues)
+  - VPC DNS attributes, DHCP options, VPC Endpoint Service checks
+  - CloudTrail event correlation with resource-specific filtering
+  - Enhanced security group validation with public/private mismatch detection
+
+### v1.0.0 - Initial Release
+- Basic health checks in monolithic script (check_cluster_artifacts.py)
+- Bash-based data collection (get_install_artifacts.sh)
 - CloudTrail log collection
-- Security group validation
-- EC2 instance validation
-- Load balancer validation
-- Route53 validation
+- Security group, EC2, Load Balancer, Route53 validation
 - Installation status validation
