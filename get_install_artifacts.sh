@@ -68,7 +68,8 @@ OPTIONS:
                                 Overrides automatic last_run.json behavior
                                 (default: 2 hours, or last_run.json if present)
   -p, --period <seconds>        CloudWatch metrics period in seconds (default: 300)
-  -l, --last                    Explicitly force using last_run.json (optional, automatic by default)
+  -f, --force-update            Force recalculation of time range, ignore last_run.json
+                                Updates last_run.json with new values
   -h, --help                    Display this help message and exit
 
 PREREQUISITES:
@@ -99,6 +100,10 @@ EXAMPLES:
   eval \$(ocm backplane cloud credentials <clusterid> -o env)
   $(basename "$0") -c <clusterid> -s 2025-01-15T00:00:00Z -e 2days
 
+  # Force update - recalculate time range even if last_run.json exists
+  eval \$(ocm backplane cloud credentials <clusterid> -o env)
+  $(basename "$0") -c <clusterid> --force-update
+
 OUTPUT FILES:
   All files are created in the specified directory (or current directory if -d
   not provided) with naming pattern:
@@ -117,7 +122,8 @@ NOTES:
   • Automatically saves run configuration to last_run.json
   • Subsequent runs without -s/-e will reuse the previous time range
   • Use -s or -e arguments to override and set a new time range
-  • Use with check_aws_health.py for automated health validation
+  • Use --force-update to recalculate time range and update last_run.json
+  • Use with check_cluster_artifacts.py for automated health validation
 
 EOF
 }
@@ -126,7 +132,7 @@ EOF
 printline() {
   local char="${1:--}"
   local width="${2:-$(tput cols)}"
-  [ $width > 80 ] && width=80
+  [ $width -gt 80 ] && width=80
   printf '%*s\n' "$width" '' | tr ' ' "$char"
 }
 
@@ -225,7 +231,7 @@ fetch_cloudwatch_metric() {
   local metric_period="${PERIOD:-300}"
 
   # Look for existing files matching the prefix
-  local file_prefix="${WRKDIR}${clusterid}_${instance_id}_${metric_name}_"
+  local file_prefix="${_F_PREFIX}_${instance_id}_${metric_name}_"
   local existing_file=$(ls ${file_prefix}*.json 2>/dev/null | head -n 1)
 
   local fetch_start="${CAPTURE_START}"
@@ -268,24 +274,38 @@ fetch_cloudwatch_metric() {
     fi
   fi
 
-  # Fetch metrics from AWS
+  # Fetch metrics from AWS with retry logic
   echo "aws cloudwatch get-metric-statistics --namespace ${namespace} --metric-name ${aws_metric_name} --dimensions Name=InstanceId,Value=${instance_id} --start-time ${fetch_start} --end-time ${fetch_end} --period ${metric_period} --statistics ${statistic} --output json"
 
   local metrics_output
-  metrics_output=$(aws cloudwatch get-metric-statistics \
-    --namespace ${namespace} \
-    --metric-name ${aws_metric_name} \
-    --dimensions Name=InstanceId,Value=${instance_id} \
-    --start-time ${fetch_start} \
-    --end-time ${fetch_end} \
-    --period ${metric_period} \
-    --statistics ${statistic} \
-    --output json)
+  local attempt=1
+  local max_attempts=3
+  local retry_delay=1
 
-  if [ $? -ne 0 ]; then
-    PERR "Failed to fetch ${description} for ${instance_id}"
-    return 1
-  fi
+  while [ $attempt -le $max_attempts ]; do
+    metrics_output=$(aws cloudwatch get-metric-statistics \
+      --namespace ${namespace} \
+      --metric-name ${aws_metric_name} \
+      --dimensions Name=InstanceId,Value=${instance_id} \
+      --start-time ${fetch_start} \
+      --end-time ${fetch_end} \
+      --period ${metric_period} \
+      --statistics ${statistic} \
+      --output json 2>&1)
+
+    if [ $? -eq 0 ]; then
+      break
+    else
+      if [ $attempt -lt $max_attempts ]; then
+        PERR "Attempt ${attempt}/${max_attempts} failed to fetch ${description} for ${instance_id}, retrying in ${retry_delay}s..."
+        sleep ${retry_delay}
+        attempt=$((attempt + 1))
+      else
+        PERR "Failed to fetch ${description} for ${instance_id} after ${max_attempts} attempts"
+        return 1
+      fi
+    fi
+  done
 
   # If we have an existing file and fetched new data, merge the datapoints
   if [ -n "$existing_file" ] && [ "$existing_file" != "$final_output_file" ]; then
@@ -380,7 +400,7 @@ fetch_instance_eni_pps_allowance_exceeded() {
 # Uses global variables: clusterid, WRKDIR
 fetch_instance_console_logs() {
   local instance_id="$1"
-  local console_file="${WRKDIR}${clusterid}_${instance_id}_console.log"
+  local console_file="${_F_PREFIX}_${instance_id}_console.log"
 
   echo "VM: ${instance_id}"
   if [ -f "${console_file}" ]; then
@@ -406,7 +426,7 @@ fetch_instance_console_logs() {
 # Uses global variables: ELAPSED_TIME, START_DATE, WRKDIR, clusterid, CLUSTER_JSON
 # Sets global variables: CAPTURE_START, CAPTURE_END, CAPTURE_WINDOW, CLUSTER_CT_LOGS
 get_cloud_trail_logs() {
-  CLUSTER_CT_LOGS="${WRKDIR}${clusterid}_${CAPTURE_START}.${CAPTURE_END}.cloudtrail.json"
+  CLUSTER_CT_LOGS="${_F_PREFIX}_${CAPTURE_START}.${CAPTURE_END}.cloudtrail.json"
 
   if [ -f ${CLUSTER_CT_LOGS} ]; then
     GREEN "using existing cloudtrail logs: ${CLUSTER_CT_LOGS} "
@@ -431,7 +451,7 @@ get_cloud_trail_logs() {
 get_route53_info() {
   local base_domain=$(jq -r '.dns.base_domain' ${CLUSTER_JSON})
   base_domain="${DOMAIN_PREFIX}.${base_domain}"
-  local hosted_zones="${WRKDIR}${clusterid}_hosted_zones.json"
+  local hosted_zones="${_F_PREFIX}_hosted_zones.json"
 
   echo "BASE_DOMAIN=\"${DOMAIN_PREFIX}.${base_domain}\""
 
@@ -454,7 +474,7 @@ get_route53_info() {
     echo "\nGetting hosted ZONE_ID from ${hosted_zones}..."
     for zone_id in $(jq -r '.[].Id | split("/")[2]' ${hosted_zones}); do
       if [ -n "$zone_id" ]; then
-        local record_sets="${WRKDIR}${clusterid}_route53_${zone_id}.records.json"
+        local record_sets="${_F_PREFIX}_route53_${zone_id}.records.json"
         if [ -f ${record_sets} ]; then
           GREEN "using existing file ${record_sets}"
         else
@@ -478,7 +498,7 @@ get_route53_info() {
 # Fetch AWS load balancer information and tag associations
 # Uses global variables: WRKDIR, clusterid, INFRA_ID
 get_load_balancers_info() {
-  local lb_all_file="${WRKDIR}${clusterid}_LB_ALL.json"
+  local lb_all_file="${_F_PREFIX}_load_balancers_all.json"
 
   if [ -f ${lb_all_file} ]; then
     GREEN "Using existing all load balancers json file ${lb_all_file} ..."
@@ -503,7 +523,7 @@ jq -r '.LoadBalancers[].LoadBalancerArn' ${lb_all_file}
 
   jq -r '.LoadBalancers[].LoadBalancerArn' ${lb_all_file} | while read -r arn; do
     local lb="${arn##*/}"
-    local lb_file="${WRKDIR}${clusterid}_LB_${lb}.json"
+    local lb_file="${_F_PREFIX}_${lb}_lb_tags.json"
 
     if [ -f ${lb_file} ]; then
       GREEN "using existing load balancer file: ${lb_file}"
@@ -552,7 +572,7 @@ get_security_groups_info() {
   fi
 
   # Fetch the security groups from AWS...
-  local sg_file="${WRKDIR}${clusterid}_security_groups.json"
+  local sg_file="${_F_PREFIX}_security_groups.json"
 
   if [ -f ${sg_file} ]; then
     GREEN "Using existing security group file: ${sg_file}"
@@ -676,7 +696,7 @@ get_vpc_endpoint_service_info() {
 get_vpc_info() {
   echo "Attempting to fetch AWS VPCs by tag values..."
   local vpc_ids=""
-  local vpc_ids_file="${WRKDIR}${clusterid}_VPC_IDS.json"
+  local vpc_ids_file="${_F_PREFIX}_VPC_IDS.json"
 
   if [ -f ${vpc_ids_file} ]; then
     GREEN "Using existing vpc ids file: ${vpc_ids_file}"
@@ -707,7 +727,7 @@ WRKDIR="."
 START_DATE=""
 ELAPSED_TIME=""
 PERIOD=""
-USE_LAST_RUN=0
+FORCE_UPDATE=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -731,8 +751,8 @@ while [[ $# -gt 0 ]]; do
       PERIOD="$2"
       shift 2
       ;;
-    -l|--last)
-      USE_LAST_RUN=1
+    -f|--force-update)
+      FORCE_UPDATE=1
       shift
       ;;
     -h|--help)
@@ -767,32 +787,20 @@ if [ ! -d "${WRKDIR}" ]; then
 fi
 # Remove any trailing slashes, replace with a single slash.
 WRKDIR="${WRKDIR%/}/"
+_F_PREFIX="${WRKDIR}${clusterid}"
 
-# Check if --last flag was provided OR if last_run.json exists and no time args provided
+# Check if we should use last_run.json or force recalculation
 LAST_RUN_FILE="${WRKDIR}last_run.json"
+USE_LAST_RUN=0
 
-if [ ${USE_LAST_RUN} -eq 1 ]; then
-  # Explicit --last flag provided
-  if [ ! -f "${LAST_RUN_FILE}" ]; then
-    PERR "Error: --last flag provided but last_run.json not found in ${WRKDIR}"
-    exit 1
-  fi
-
-  BLUE "Loading configuration from previous run (--last flag): ${LAST_RUN_FILE}"
-  CAPTURE_START=$(jq -r '.capture_start' "${LAST_RUN_FILE}")
-  CAPTURE_END=$(jq -r '.capture_end' "${LAST_RUN_FILE}")
-
-  if [ -z "${CAPTURE_START}" ] || [ "${CAPTURE_START}" == "null" ] || [ -z "${CAPTURE_END}" ] || [ "${CAPTURE_END}" == "null" ]; then
-    PERR "Error: Invalid or missing capture_start/capture_end in ${LAST_RUN_FILE}"
-    exit 1
-  fi
-
-  BLUE "Using CAPTURE_START: ${CAPTURE_START}"
-  BLUE "Using CAPTURE_END: ${CAPTURE_END}"
-elif [ -f "${LAST_RUN_FILE}" ] && [ -z "${START_DATE}" ] && [ -z "${ELAPSED_TIME}" ]; then
-  # Automatic: last_run.json exists and no time arguments provided
+# Only load from last_run.json if:
+# 1. --force-update is NOT set
+# 2. No time arguments (-s/-e) were provided
+# 3. last_run.json exists
+if [ ${FORCE_UPDATE} -eq 0 ] && [ -f "${LAST_RUN_FILE}" ] && [ -z "${START_DATE}" ] && [ -z "${ELAPSED_TIME}" ]; then
+  # Automatic: last_run.json exists and no time arguments provided and not forcing update
   BLUE "Found previous run configuration: ${LAST_RUN_FILE}"
-  BLUE "No time arguments provided (-s/-e), using previous run's time range"
+  BLUE "No time arguments provided (-s/-e) and --force-update not set, using previous run's time range"
 
   CAPTURE_START=$(jq -r '.capture_start' "${LAST_RUN_FILE}")
   CAPTURE_END=$(jq -r '.capture_end' "${LAST_RUN_FILE}")
@@ -805,15 +813,17 @@ elif [ -f "${LAST_RUN_FILE}" ] && [ -z "${START_DATE}" ] && [ -z "${ELAPSED_TIME
     BLUE "Using CAPTURE_END: ${CAPTURE_END}"
     USE_LAST_RUN=1
   fi
+elif [ ${FORCE_UPDATE} -eq 1 ]; then
+  BLUE "--force-update flag set, recalculating time range (ignoring last_run.json)"
 fi
 
 BLUE "This may require refreshing local AWS creds, example..."
 BLUE "eval \$(ocm backplane cloud credentials ${clusterid} -o env)"
 echo ""
-CLUSTER_JSON="${WRKDIR}${clusterid}_cluster.json"
-CLUSTER_CTX_FILE="${WRKDIR}${clusterid}_cluster_context.json"
-CLUSTER_RESOURCES="${WRKDIR}${clusterid}_resources.json"
-CLUSTER_EC2_INSTANCES="${WRKDIR}${clusterid}_ec2_instances.json"
+CLUSTER_JSON="${_F_PREFIX}_cluster.json"
+CLUSTER_CTX_FILE="${_F_PREFIX}_cluster_context.json"
+CLUSTER_RESOURCES="${_F_PREFIX}_resources.json"
+CLUSTER_EC2_INSTANCES="${_F_PREFIX}_ec2_instances.json"
 
 HDR "Get OCM Cluster INFO"
 if [ -f ${CLUSTER_JSON} ]; then
@@ -873,7 +883,7 @@ else
 fi
 
 
-# Only calculate time ranges if not using --last flag
+# Only calculate time ranges if not loaded from last_run.json
 if [ ${USE_LAST_RUN} -ne 1 ]; then
   # Determine elapsed time first (needed for ready cluster logic)
   if [ -n "${ELAPSED_TIME}" ]; then
@@ -929,9 +939,9 @@ populate_vpc_info_files() {
   local VPC_IDS="$*"
   GREEN "Found the following VPC ids in cluster resources install logs:\n${VPC_IDS}"
   for VPC in ${VPC_IDS}; do
-    local VPC_FILE="${WRKDIR}${clusterid}_${VPC}_VPC.json"
-    local VPC_FILE_DNS_HOST="${WRKDIR}${clusterid}_${VPC}_VPC_attrDnsHost.json"
-    local VPC_FILE_DNS_SUPP="${WRKDIR}${clusterid}_${VPC}_VPC_attrDnsSupp.json"
+    local VPC_FILE="${_F_PREFIX}_${VPC}_VPC.json"
+    local VPC_FILE_DNS_HOST="${_F_PREFIX}_${VPC}_VPC_attrDnsHost.json"
+    local VPC_FILE_DNS_SUPP="${_F_PREFIX}_${VPC}_VPC_attrDnsSupp.json"
 
     if [ -f ${VPC_FILE} ]; then
       GREEN "Using existing VPC file ${VPC_FILE}"
@@ -973,7 +983,7 @@ populate_vpc_info_files() {
     fi
 
     dhcp_id=$(jq -r '.Vpcs[].DhcpOptionsId' ${VPC_FILE})
-    local DHCP_OPT_FILE="${WRKDIR}${clusterid}_${dhcp_id}_DHCP_OPT.json"
+    local DHCP_OPT_FILE="${_F_PREFIX}_${dhcp_id}_DHCP_OPT.json"
     if [ -f ${DHCP_OPT_FILE} ]; then
       GREEN "Found existing local dhcp options file: ${DHCP_OPT_FILE}"
     else
@@ -1132,7 +1142,7 @@ PYEOF3
 
   for ARN in ${LB_ARNS}; do
     LB="${ARN##*/}"
-    LB_FILE="${WRKDIR}${clusterid}_LB_${LB}.json"
+    LB_FILE="${_F_PREFIX}_load_balancer_${LB}.json"
     echo "Checking ARN: ${ARN}"
     if [ -f ${LB_FILE} ]; then
       GREEN "Using existing load balancer file: ${LB_FILE}"
@@ -1206,5 +1216,5 @@ HDR "Getting Load Balancers"
 get_load_balancers_info
 
 ##############################
-# Save runtime configuration for potential future --last usage
+# Save runtime configuration to last_run.json for future automatic reuse
 write_runtime_config_to_file

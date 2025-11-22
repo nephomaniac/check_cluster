@@ -13,15 +13,27 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Global variables
-markdown_output = []  # Accumulate markdown output
+html_sections = {}  # Accumulate HTML sections by category
 source_directory = Path('.')  # Source directory for cluster data files
 cluster_state = 'unknown'  # Cluster state (ready, error, installing, etc.)
 incident_date = None  # Incident timestamp for temporal filtering (datetime object)
+metrics_data = {}  # Store metrics data for chart generation
+cloudtrail_events = []  # Store CloudTrail events for timeline
+
+def add_html_section(category: str, title: str, content: str, status: str = "OK"):
+    """Add HTML section for a check category"""
+    global html_sections
+    if category not in html_sections:
+        html_sections[category] = []
+    html_sections[category].append({
+        'title': title,
+        'content': content,
+        'status': status
+    })
 
 def add_markdown(text: str):
-    """Add text to markdown output"""
-    global markdown_output
-    markdown_output.append(text)
+    """Legacy function - no longer used since we generate HTML instead of markdown"""
+    pass
 
 # Color codes for output
 class Colors:
@@ -371,8 +383,10 @@ def parse_console_log_for_errors(console_log_path: Path) -> Dict:
                 if 'kernel panic' in line_lower or 'panic:' in line_lower:
                     errors['kernel_panics'].append((line_num, line.strip()[:200]))
 
-                # OOM (Out of Memory)
-                elif 'out of memory' in line_lower or 'oom' in line_lower or 'killed process' in line_lower:
+                # OOM (Out of Memory) - be specific to avoid false positives like "OOMM5O" in filenames
+                elif any(x in line_lower for x in ['out of memory', 'oom killer', 'oom-kill', 'oom_kill',
+                                                     'oom:', 'killed process', ' oom ', 'invoked oom',
+                                                     'oom_reaper', 'oom allocat']):
                     errors['out_of_memory'].append((line_num, line.strip()[:200]))
 
                 # Disk/Storage errors
@@ -3189,111 +3203,649 @@ def wrap_sections_in_details(markdown_lines: List[str], default_open: bool = Fal
     # Return as a single string
     return ['\n'.join(result)]
 
-def write_markdown_report(cluster_name: str, cluster_uuid: str, infra_id: str,
-                          region: str, openshift_version: str, cluster_state: str,
-                          results: Dict) -> str:
-    """Write the markdown report to a file"""
-    global markdown_output, source_directory
+def generate_html_header(title: str) -> str:
+    """Generate HTML header with CSS and Chart.js"""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; padding: 20px; }}
+        header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }}
+        header h1 {{ margin-bottom: 10px; font-size: 2em; }}
+        header .meta {{ opacity: 0.9; font-size: 0.9em; }}
+        nav {{
+            background: white;
+            padding: 15px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }}
+        nav a {{
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            background: #f0f0f0;
+            color: #333;
+            transition: all 0.3s;
+        }}
+        nav a:hover {{ background: #667eea; color: white; }}
+        nav a.active {{ background: #667eea; color: white; }}
+        .card {{
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .card h2 {{
+            color: #667eea;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }}
+        .status-badge {{
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }}
+        .status-ok {{ background: #d4edda; color: #155724; }}
+        .status-warning {{ background: #fff3cd; color: #856404; }}
+        .status-error {{ background: #f8d7da; color: #721c24; }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }}
+        th, td {{
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }}
+        th {{
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }}
+        tr:hover {{ background: #f8f9fa; }}
+        .chart-container {{
+            position: relative;
+            height: 400px;
+            margin: 20px 0;
+        }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }}
+        .metric-card {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .metric-value {{ font-size: 2.5em; font-weight: 700; margin: 10px 0; }}
+        .metric-label {{ opacity: 0.9; text-transform: uppercase; font-size: 0.85em; }}
+        .issue-list {{ list-style: none; }}
+        .issue-list li {{
+            padding: 10px;
+            margin: 5px 0;
+            border-left: 4px solid #f8d7da;
+            background: #fff5f5;
+            border-radius: 4px;
+        }}
+        .issue-list li.warning {{ border-left-color: #fff3cd; background: #fffef5; }}
+        .timeline {{
+            position: relative;
+            padding: 20px 0;
+        }}
+        .timeline-event {{
+            padding: 15px;
+            margin: 10px 0;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            border-radius: 4px;
+            position: relative;
+        }}
+        .timeline-event.error {{ border-left-color: #dc3545; }}
+        .timeline-event.before {{ border-left-color: #ffc107; }}
+        .timeline-event.during {{ border-left-color: #dc3545; background: #fff5f5; }}
+        .timeline-event.after {{ border-left-color: #28a745; opacity: 0.6; }}
+        .timeline-time {{
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }}
+        .timeline-badge {{
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-left: 10px;
+        }}
+        code {{
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 0.9em;
+        }}
+        pre {{
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }}
+        .incident-marker {{
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: red;
+            z-index: 10;
+        }}
+        .incident-label {{
+            position: absolute;
+            background: red;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 600;
+            z-index: 11;
+        }}
+    </style>
+</head>
+<body>
+"""
 
-    # Generate timestamp and full path
+def generate_html_footer() -> str:
+    """Generate HTML footer"""
+    return """
+</body>
+</html>
+"""
+
+def generate_navigation(current_page: str = "index") -> str:
+    """Generate navigation menu"""
+    pages = [
+        ("index", "Summary"),
+        ("metrics", "EC2 Metrics"),
+        ("cloudtrail", "CloudTrail Events"),
+        ("details", "Detailed Checks")
+    ]
+
+    nav_html = '<nav>\n'
+    for page_id, page_name in pages:
+        active = ' class="active"' if page_id == current_page else ''
+        nav_html += f'    <a href="{page_id}.html"{active}>{page_name}</a>\n'
+    nav_html += '</nav>\n'
+
+    return nav_html
+
+def generate_metrics_charts_html(cluster_id: str, infra_id: str) -> str:
+    """Generate HTML with interactive metrics charts"""
+    global source_directory, incident_date, metrics_data
+
+    html = ""
+
+    # Get list of instances
+    instances_data = load_json_file(f"{cluster_id}_ec2_instances.json")
+    if not instances_data:
+        return "<p>No EC2 instances data available for metrics visualization.</p>"
+
+    instances = []
+    if isinstance(instances_data, list):
+        for item in instances_data:
+            if isinstance(item, list):
+                instances.extend(item)
+            else:
+                instances.append(item)
+
+    # Filter cluster instances
+    cluster_instances = []
+    for instance in instances:
+        tags = instance.get('Tags', [])
+        if any(infra_id in str(tag.get('Value', '')) for tag in tags):
+            instance_id = instance.get('InstanceId')
+            instance_name = next((tag.get('Value') for tag in tags if tag.get('Key') == 'Name'), instance_id)
+            cluster_instances.append({
+                'id': instance_id,
+                'name': instance_name
+            })
+
+    if not cluster_instances:
+        return "<p>No cluster instances found for metrics visualization.</p>"
+
+    # Define metrics to visualize
+    metric_configs = [
+        ('CPUUtilization', 'CPU Utilization (%)', '#ff6384'),
+        ('mem_used_percent', 'Memory Utilization (%)', '#36a2eb'),
+        ('InstanceEBSIOPSExceededCheck', 'EBS IOPS Exceeded', '#ffcd56'),
+        ('InstanceEBSThroughputExceededCheck', 'EBS Throughput Exceeded', '#4bc0c0'),
+        ('bw_in_allowance_exceeded', 'Network Bandwidth IN Exceeded', '#9966ff'),
+        ('bw_out_allowance_exceeded', 'Network Bandwidth OUT Exceeded', '#ff9f40'),
+        ('pps_allowance_exceeded', 'Network PPS Exceeded', '#ff6384')
+    ]
+
+    chart_id = 0
+
+    for inst in cluster_instances:
+        instance_id = inst['id']
+        instance_name = inst['name']
+
+        html += f'<div class="card">\n'
+        html += f'<h2>{instance_name} ({instance_id})</h2>\n'
+
+        for metric_name, metric_label, color in metric_configs:
+            metric_data = load_cloudwatch_metrics(cluster_id, instance_id, metric_name)
+
+            if not metric_data or not metric_data.get('Datapoints'):
+                continue
+
+            datapoints = metric_data['Datapoints']
+
+            # Sort by timestamp
+            datapoints.sort(key=lambda x: x.get('Timestamp', ''))
+
+            # Prepare data for Chart.js
+            timestamps = []
+            values = []
+
+            for dp in datapoints:
+                timestamp = dp.get('Timestamp')
+                value = dp.get('Average') or dp.get('Sum') or dp.get('Maximum')
+
+                if timestamp and value is not None:
+                    timestamps.append(timestamp)
+                    values.append(value)
+
+            if not timestamps:
+                continue
+
+            chart_id += 1
+            canvas_id = f"chart{chart_id}"
+
+            html += f'<h3>{metric_label}</h3>\n'
+            html += f'<div class="chart-container">\n'
+            html += f'    <canvas id="{canvas_id}"></canvas>\n'
+            html += f'</div>\n'
+
+            # Generate Chart.js script
+            html += f'<script>\n'
+            html += f'(function() {{\n'
+            html += f'    const ctx = document.getElementById("{canvas_id}").getContext("2d");\n'
+            html += f'    const data = {{\n'
+            html += f'        labels: {json.dumps(timestamps)},\n'
+            html += f'        datasets: [{{\n'
+            html += f'            label: "{metric_label}",\n'
+            html += f'            data: {json.dumps(values)},\n'
+            html += f'            borderColor: "{color}",\n'
+            html += f'            backgroundColor: "{color}33",\n'
+            html += f'            borderWidth: 2,\n'
+            html += f'            fill: true,\n'
+            html += f'            tension: 0.4\n'
+            html += f'        }}]\n'
+            html += f'    }};\n'
+
+            # Add incident date marker if set
+            incident_line_plugin = ""
+            if incident_date:
+                incident_iso = incident_date.strftime('%Y-%m-%dT%H:%M:%SZ')
+                incident_line_plugin = f"""
+            annotation: {{
+                annotations: {{
+                    incidentLine: {{
+                        type: 'line',
+                        xMin: '{incident_iso}',
+                        xMax: '{incident_iso}',
+                        borderColor: 'red',
+                        borderWidth: 3,
+                        borderDash: [6, 6],
+                        label: {{
+                            content: 'Incident',
+                            enabled: true,
+                            position: 'top',
+                            backgroundColor: 'red',
+                            color: 'white'
+                        }}
+                    }}
+                }}
+            }},"""
+
+            html += f'    const config = {{\n'
+            html += f'        type: "line",\n'
+            html += f'        data: data,\n'
+            html += f'        options: {{\n'
+            html += f'            responsive: true,\n'
+            html += f'            maintainAspectRatio: false,\n'
+            html += f'            scales: {{\n'
+            html += f'                x: {{\n'
+            html += f'                    type: "time",\n'
+            html += f'                    time: {{\n'
+            html += f'                        unit: "minute",\n'
+            html += f'                        displayFormats: {{\n'
+            html += f'                            minute: "MMM d, HH:mm"\n'
+            html += f'                        }}\n'
+            html += f'                    }},\n'
+            html += f'                    title: {{\n'
+            html += f'                        display: true,\n'
+            html += f'                        text: "Time (UTC)"\n'
+            html += f'                    }}\n'
+            html += f'                }},\n'
+            html += f'                y: {{\n'
+            html += f'                    beginAtZero: true,\n'
+            html += f'                    title: {{\n'
+            html += f'                        display: true,\n'
+            html += f'                        text: "{metric_label}"\n'
+            html += f'                    }}\n'
+            html += f'                }}\n'
+            html += f'            }},\n'
+            html += f'            plugins: {{\n'
+            html += f'                legend: {{\n'
+            html += f'                    display: true,\n'
+            html += f'                    position: "top"\n'
+            html += f'                }},\n'
+            html += f'                tooltip: {{\n'
+            html += f'                    mode: "index",\n'
+            html += f'                    intersect: false\n'
+            html += f'                }}\n'
+            html += f'            }}\n'
+            html += f'        }}\n'
+            html += f'    }};\n'
+            html += f'    new Chart(ctx, config);\n'
+            html += f'}})();\n'
+            html += f'</script>\n'
+
+        html += '</div>\n'
+
+    return html
+
+def generate_cloudtrail_timeline_html(cluster_id: str, infra_id: str) -> str:
+    """Generate CloudTrail events timeline"""
+    global incident_date, cloudtrail_events
+
+    html = '<div class="card">\n'
+    html += '<h2>CloudTrail Events Timeline</h2>\n'
+
+    if incident_date:
+        html += f'<p><strong>Incident Date:</strong> <code>{incident_date.strftime("%Y-%m-%d %H:%M:%S UTC")}</code></p>\n'
+        html += '<p>Events are color-coded based on their temporal relationship to the incident:</p>\n'
+        html += '<ul>\n'
+        html += '    <li><span style="color: #dc3545;">●</span> <strong>Red:</strong> DURING incident (within 60s before)</li>\n'
+        html += '    <li><span style="color: #ffc107;">●</span> <strong>Yellow:</strong> BEFORE incident (potential cause)</li>\n'
+        html += '    <li><span style="color: #28a745;">●</span> <strong>Green:</strong> AFTER incident (not a cause)</li>\n'
+        html += '</ul>\n'
+
+    # Get CloudTrail events
+    if not cloudtrail_events:
+        # Load from file if not already in memory
+        data = load_json_file(f"{cluster_id}_cloudtrail.json")
+        if data:
+            events = data if isinstance(data, list) else []
+            # Filter for cluster-related events
+            for event in events:
+                event_str = json.dumps(event)
+                if infra_id.lower() in event_str.lower() or cluster_id.lower() in event_str.lower():
+                    cloudtrail_events.append(event)
+
+    if not cloudtrail_events:
+        html += '<p>No CloudTrail events found.</p>\n'
+        html += '</div>\n'
+        return html
+
+    # Sort events by time
+    sorted_events = sorted(cloudtrail_events, key=lambda x: x.get('EventTime', ''))
+
+    html += '<div class="timeline">\n'
+
+    for event in sorted_events[:50]:  # Limit to 50 events
+        event_name = event.get('EventName', 'unknown')
+        event_time = event.get('EventTime', '')
+        event_source = event.get('EventSource', 'unknown')
+        username = event.get('Username', 'unknown')
+
+        # Parse CloudTrailEvent
+        cloud_trail_event = event.get('CloudTrailEvent', '{}')
+        try:
+            ct_data = json.loads(cloud_trail_event)
+            error_code = ct_data.get('errorCode', '')
+            error_message = ct_data.get('errorMessage', '')
+        except json.JSONDecodeError:
+            error_code = ''
+            error_message = ''
+
+        # Determine temporal class
+        timeline_class = ""
+        temporal_label = ""
+
+        if incident_date and event_time:
+            try:
+                event_dt = datetime.strptime(event_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+                time_diff = (incident_date - event_dt).total_seconds()
+
+                if time_diff < 0:
+                    timeline_class = "after"
+                    temporal_label = f"AFTER incident ({abs(time_diff)/60:.1f} min)"
+                elif time_diff < 60:
+                    timeline_class = "during"
+                    temporal_label = f"DURING incident ({time_diff:.0f}s before)"
+                elif time_diff < 3600:
+                    timeline_class = "before"
+                    temporal_label = f"BEFORE incident ({time_diff/60:.1f} min before)"
+                else:
+                    timeline_class = "before"
+                    temporal_label = f"BEFORE incident ({time_diff/3600:.1f} hr before)"
+            except (ValueError, AttributeError):
+                timeline_class = ""
+
+        if error_code:
+            timeline_class += " error"
+
+        html += f'<div class="timeline-event {timeline_class}">\n'
+        html += f'    <div class="timeline-time">{event_time}'
+        if temporal_label:
+            html += f' <span class="timeline-badge">{temporal_label}</span>'
+        html += '</div>\n'
+        html += f'    <div><strong>{event_name}</strong> - {event_source}</div>\n'
+        html += f'    <div>User: <code>{username}</code></div>\n'
+        if error_code:
+            html += f'    <div style="color: #dc3545;"><strong>Error:</strong> {error_code}</div>\n'
+            if error_message:
+                html += f'    <div style="color: #dc3545; font-size: 0.9em;">{error_message[:200]}</div>\n'
+        html += '</div>\n'
+
+    html += '</div>\n'
+    html += '</div>\n'
+
+    return html
+
+def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
+                      region: str, openshift_version: str, cluster_state: str,
+                      results: Dict, cluster_id: str) -> str:
+    """Write HTML report to results directory"""
+    global source_directory, incident_date
+
+    # Create results directory
     timestamp = int(time.time())
-    filename = f"results_{timestamp}.md"
-    filepath = source_directory / filename
+    results_dir = source_directory / f"results_{timestamp}"
+    results_dir.mkdir(exist_ok=True)
 
-    # Build the complete markdown document
-    full_markdown = []
+    # Generate cluster metadata
+    generated_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
-    # Title and metadata
-    full_markdown.append(f"# AWS Health Check Report - {cluster_name}\n")
-    full_markdown.append(f"**Generated**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+    # Common header info
+    def get_header_html(page_title: str):
+        header = f"""<div class="container">
+<header>
+    <h1>{page_title}</h1>
+    <div class="meta">
+        <strong>Cluster:</strong> {cluster_name} |
+        <strong>ID:</strong> {cluster_uuid} |
+        <strong>Region:</strong> {region} |
+        <strong>State:</strong> {cluster_state}<br>
+        <strong>Generated:</strong> {generated_time}"""
 
-    # Cluster Information (collapsible, open by default)
-    full_markdown.append('<a name="cluster-information"></a>\n')
-    full_markdown.append('<details open>\n')
-    full_markdown.append('<summary><h2>Cluster Information</h2></summary>\n\n')
-    full_markdown.append(f"- **Cluster Name**: {cluster_name}\n")
-    full_markdown.append(f"- **Cluster ID**: `{cluster_uuid}`\n")
-    full_markdown.append(f"- **Infrastructure ID**: `{infra_id}`\n")
-    full_markdown.append(f"- **Region**: {region}\n")
-    full_markdown.append(f"- **OpenShift Version**: {openshift_version}\n")
-    full_markdown.append(f"- **State**: {cluster_state}\n\n")
-    full_markdown.append('</details>\n\n')
+        if incident_date:
+            header += f' | <strong style="color: #ffeb3b;">Incident Date:</strong> {incident_date.strftime("%Y-%m-%d %H:%M:%S UTC")}'
 
-    # Table of Contents (collapsible, open by default)
-    full_markdown.append('<a name="table-of-contents"></a>\n')
-    full_markdown.append('<details open>\n')
-    full_markdown.append('<summary><h2>Table of Contents</h2></summary>\n\n')
-    full_markdown.append("1. [Cluster Information](#cluster-information)\n")
-    full_markdown.append("2. [Health Check Summary](#health-check-summary)\n")
-    full_markdown.append("3. [Installation Status Check](#installation-status-check)\n")
-    full_markdown.append("4. [Cluster Context Check](#cluster-context-check)\n")
-    full_markdown.append("5. [VPC DNS Attributes Health Check](#vpc-dns-attributes-health-check)\n")
-    full_markdown.append("6. [DHCP Options Health Check](#dhcp-options-health-check)\n")
-    full_markdown.append("7. [VPC Endpoint Service Health Check (PrivateLink)](#vpc-endpoint-service-health-check-(privatelink))\n")
-    full_markdown.append("8. [Security Groups Health Check](#security-groups-health-check)\n")
-    full_markdown.append("9. [EC2 Instances Health Check](#ec2-instances-health-check)\n")
-    full_markdown.append("10. [Load Balancers Health Check](#load-balancers-health-check)\n")
-    full_markdown.append("11. [Route53 Health Check](#route53-health-check)\n")
-    full_markdown.append("12. [CloudTrail Logs Health Check](#cloudtrail-logs-health-check)\n")
-    full_markdown.append("13. [Detailed Analysis](#detailed-analysis)\n\n")
-    full_markdown.append('</details>\n\n')
+        header += """
+    </div>
+</header>
+"""
+        return header
 
-    full_markdown.append("---\n\n")
+    # === INDEX PAGE (Summary) ===
+    index_html = generate_html_header(f"Cluster Health Report - {cluster_name}")
+    index_html += get_header_html("Cluster Health Summary")
+    index_html += generate_navigation("index")
 
-    # Health Check Summary section (collapsible, open by default)
-    full_markdown.append('<a name="health-check-summary"></a>\n')
-    full_markdown.append('<details open>\n')
-    full_markdown.append('<summary><h2>Health Check Summary</h2></summary>\n\n')
-    full_markdown.append("| Component | Status | Issues |\n")
-    full_markdown.append("|-----------|--------|--------|\n")
+    # Summary statistics
+    total_checks = len(results)
+    ok_count = sum(1 for status, _ in results.values() if status == "OK")
+    warning_count = sum(1 for status, _ in results.values() if status == "WARNING")
+    error_count = sum(1 for status, _ in results.values() if status == "ERROR")
 
-    # Mapping from result keys to section anchors
-    section_anchors = {
-        'installation_status': 'installation-status-check',
-        'cluster_context': 'cluster-context-check',
-        'vpc_dns_attributes': 'vpc-dns-attributes-health-check',
-        'dhcp_options': 'dhcp-options-health-check',
-        'vpc_endpoint_service': 'vpc-endpoint-service-health-check-(privatelink)',
-        'security_groups': 'security-groups-health-check',
-        'instances': 'ec2-instances-health-check',
-        'load_balancers': 'load-balancers-health-check',
-        'route53': 'route53-health-check',
-        'cloudtrail': 'cloudtrail-logs-health-check'
-    }
+    index_html += '<div class="grid">\n'
+    index_html += '<div class="metric-card">\n'
+    index_html += f'    <div class="metric-label">Total Checks</div>\n'
+    index_html += f'    <div class="metric-value">{total_checks}</div>\n'
+    index_html += '</div>\n'
+    index_html += '<div class="metric-card" style="background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);">\n'
+    index_html += f'    <div class="metric-label">Passed</div>\n'
+    index_html += f'    <div class="metric-value">{ok_count}</div>\n'
+    index_html += '</div>\n'
+    index_html += '<div class="metric-card" style="background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%);">\n'
+    index_html += f'    <div class="metric-label">Warnings</div>\n'
+    index_html += f'    <div class="metric-value">{warning_count}</div>\n'
+    index_html += '</div>\n'
+    index_html += '<div class="metric-card" style="background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);">\n'
+    index_html += f'    <div class="metric-label">Errors</div>\n'
+    index_html += f'    <div class="metric-value">{error_count}</div>\n'
+    index_html += '</div>\n'
+    index_html += '</div>\n'
+
+    # Summary table
+    index_html += '<div class="card">\n'
+    index_html += '<h2>Health Check Results</h2>\n'
+    index_html += '<table>\n'
+    index_html += '<thead><tr><th>Component</th><th>Status</th><th>Issues</th></tr></thead>\n'
+    index_html += '<tbody>\n'
 
     for category, (status, issues) in results.items():
         category_name = category.replace('_', ' ').title()
-        status_badge = "🟢" if status == "OK" else ("🟡" if status == "WARNING" else "🔴")
+        status_class = f"status-{status.lower()}"
         issue_count = len(issues)
 
-        # Make component name a clickable link to its section
-        anchor = section_anchors.get(category, category.replace('_', '-'))
-        linked_name = f"[{category_name}](#{anchor})"
+        index_html += f'<tr>\n'
+        index_html += f'    <td><strong>{category_name}</strong></td>\n'
+        index_html += f'    <td><span class="status-badge {status_class}">{status}</span></td>\n'
+        index_html += f'    <td>{issue_count}</td>\n'
+        index_html += f'</tr>\n'
 
-        full_markdown.append(f"| {linked_name} | {status_badge} {status} | {issue_count} |\n")
+    index_html += '</tbody>\n'
+    index_html += '</table>\n'
+    index_html += '</div>\n'
 
-    full_markdown.append("\n")
-    full_markdown.append('</details>\n\n')
+    # Cluster Information
+    index_html += '<div class="card">\n'
+    index_html += '<h2>Cluster Information</h2>\n'
+    index_html += '<table>\n'
+    index_html += f'<tr><td><strong>Cluster Name</strong></td><td>{cluster_name}</td></tr>\n'
+    index_html += f'<tr><td><strong>Cluster ID</strong></td><td><code>{cluster_uuid}</code></td></tr>\n'
+    index_html += f'<tr><td><strong>Infrastructure ID</strong></td><td><code>{infra_id}</code></td></tr>\n'
+    index_html += f'<tr><td><strong>Region</strong></td><td>{region}</td></tr>\n'
+    index_html += f'<tr><td><strong>OpenShift Version</strong></td><td>{openshift_version}</td></tr>\n'
+    index_html += f'<tr><td><strong>State</strong></td><td>{cluster_state}</td></tr>\n'
+    index_html += '</table>\n'
+    index_html += '</div>\n'
 
-    full_markdown.append("---\n\n")
+    index_html += '</div>\n'  # Close container
+    index_html += generate_html_footer()
 
-    # Detailed Analysis section header
-    full_markdown.append('<a name="detailed-analysis"></a>\n')
-    full_markdown.append("## Detailed Analysis\n\n")
-    full_markdown.append("The following sections provide detailed health check results for each component.\n\n")
-    full_markdown.append("---\n\n")
+    # Write index.html
+    with open(results_dir / "index.html", 'w') as f:
+        f.write(index_html)
 
-    # Wrap detailed sections in collapsible details tags (collapsed by default)
-    wrapped_sections = wrap_sections_in_details(markdown_output, default_open=False)
+    # === METRICS PAGE ===
+    metrics_html = generate_html_header(f"EC2 Metrics - {cluster_name}")
+    metrics_html += get_header_html("EC2 CloudWatch Metrics")
+    metrics_html += generate_navigation("metrics")
+    metrics_html += generate_metrics_charts_html(cluster_id, infra_id)
+    metrics_html += '</div>\n'  # Close container
+    metrics_html += generate_html_footer()
 
-    # Add all accumulated markdown content (detailed sections)
-    full_markdown.extend(wrapped_sections)
+    # Write metrics.html
+    with open(results_dir / "metrics.html", 'w') as f:
+        f.write(metrics_html)
 
-    # Write to file
-    with open(filepath, 'w') as f:
-        f.write(''.join(full_markdown))
+    # === CLOUDTRAIL PAGE ===
+    cloudtrail_html = generate_html_header(f"CloudTrail Events - {cluster_name}")
+    cloudtrail_html += get_header_html("CloudTrail Events Timeline")
+    cloudtrail_html += generate_navigation("cloudtrail")
+    cloudtrail_html += generate_cloudtrail_timeline_html(cluster_id, infra_id)
+    cloudtrail_html += '</div>\n'  # Close container
+    cloudtrail_html += generate_html_footer()
 
-    return str(filepath)
+    # Write cloudtrail.html
+    with open(results_dir / "cloudtrail.html", 'w') as f:
+        f.write(cloudtrail_html)
+
+    # === DETAILS PAGE ===
+    details_html = generate_html_header(f"Detailed Checks - {cluster_name}")
+    details_html += get_header_html("Detailed Check Results")
+    details_html += generate_navigation("details")
+
+    # Add detailed results
+    for category, (status, issues) in results.items():
+        category_name = category.replace('_', ' ').title()
+        status_class = f"status-{status.lower()}"
+
+        details_html += '<div class="card">\n'
+        details_html += f'<h2>{category_name} <span class="status-badge {status_class}">{status}</span></h2>\n'
+
+        if issues:
+            details_html += '<ul class="issue-list">\n'
+            for issue in issues:
+                issue_class = "warning" if "WARNING" in issue else ""
+                details_html += f'    <li class="{issue_class}">{issue}</li>\n'
+            details_html += '</ul>\n'
+        else:
+            details_html += '<p style="color: #28a745;">✓ All checks passed</p>\n'
+
+        details_html += '</div>\n'
+
+    details_html += '</div>\n'  # Close container
+    details_html += generate_html_footer()
+
+    # Write details.html
+    with open(results_dir / "details.html", 'w') as f:
+        f.write(details_html)
+
+    return str(results_dir / "index.html")
 
 def check_ec2_metrics(cluster_id: str, infra_id: str) -> Tuple[str, List[str]]:
     """
@@ -3686,8 +4238,10 @@ def check_ec2_console_logs(cluster_id: str, infra_id: str) -> Tuple[str, List[st
 
 def main():
     """Main health check function"""
-    global markdown_output, source_directory, cluster_state
-    markdown_output = []  # Reset markdown output
+    global html_sections, source_directory, cluster_state, metrics_data, cloudtrail_events
+    html_sections = {}  # Reset HTML sections
+    metrics_data = {}  # Reset metrics data
+    cloudtrail_events = []  # Reset CloudTrail events
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
@@ -3841,7 +4395,7 @@ Notes:
     # Check EC2 console logs for errors
     results['ec2_console_logs'] = check_ec2_console_logs(cluster_id, infra_id)
 
-    # Summary (terminal output only - markdown summary is generated in write_markdown_report)
+    # Summary (terminal output only - HTML report is generated in write_html_report)
     print(f"\n{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}")
     print(f"{Colors.BOLD}{Colors.BLUE}{'Health Check Summary'.center(80)}{Colors.END}")
     print(f"{Colors.BOLD}{Colors.BLUE}{'=' * 80}{Colors.END}\n")
@@ -3860,14 +4414,15 @@ Notes:
     else:
         print_status("WARNING", "Summary: ISSUES DETECTED")
 
-    # Write markdown report
-    print(f"\n{Colors.BOLD}{Colors.BLUE}Generating markdown report...{Colors.END}")
-    markdown_file = write_markdown_report(
+    # Write HTML report
+    print(f"\n{Colors.BOLD}{Colors.BLUE}Generating interactive HTML report...{Colors.END}")
+    html_index = write_html_report(
         cluster_name, cluster_uuid, infra_id,
         region, openshift_version, local_cluster_state,
-        results
+        results, cluster_id
     )
-    print(f"{Colors.BOLD}{Colors.GREEN}✓ Markdown report written to: {markdown_file}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.GREEN}✓ HTML report written to: {html_index}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.GREEN}  Open in browser to view interactive metrics charts and CloudTrail timeline{Colors.END}")
 
     return 0 if all_ok else 1
 
