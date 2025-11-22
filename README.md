@@ -432,19 +432,56 @@ cat <cluster-id>_i-*_console.log | grep -i error
 
 ### With check_aws_health.py
 
-`get_install_artifacts.sh` collects **all data files** that `check_aws_health.py` analyzes:
+`get_install_artifacts.py` collects **all data files** that `check_aws_health.py` analyzes:
 
-| check_aws_health.py Function | Files Required | Provided by get_install_artifacts.sh |
+| check_aws_health.py Function | Files Required | Provided by get_install_artifacts.py |
 |------------------------------|----------------|--------------------------------------|
-| `check_vpc_dns_attributes()` | VPC files, DNS attributes | ✅ Lines 52-98 |
-| `check_dhcp_options()` | VPC files, DHCP options | ✅ Lines 88-96 |
-| `check_vpc_endpoint_service()` | VPC endpoint service, connections | ✅ Lines 267-312 |
-| `check_security_groups()` | Security groups JSON | ✅ Lines 436-452 |
-| `check_instances()` | EC2 instances JSON | ✅ Lines 324-351 |
-| `check_load_balancers()` | Load balancer JSON files | ✅ Lines 202-257, 454-481 |
-| `check_route53()` | Hosted zones, record sets | ✅ Lines 390-434 |
-| `check_cloudtrail_logs()` | CloudTrail events JSON | ✅ Lines 369-388 |
-| `check_installation_status()` | Cluster JSON, resources JSON | ✅ Lines 20-44 |
+| `check_vpc_dns_attributes()` | VPC files, DNS attributes | ✅ `_populate_vpc_info_files()` |
+| `check_dhcp_options()` | VPC files, DHCP options | ✅ `_populate_vpc_info_files()` |
+| `check_vpc_endpoint_service()` | VPC endpoint service, connections | ✅ `_get_vpc_endpoint_service_info()` |
+| `check_security_groups()` | Security groups JSON | ✅ `_get_security_groups_info()` |
+| `check_instances()` | EC2 instances JSON | ✅ `_get_ec2_instance_info()` |
+| `check_load_balancers()` | Load balancer JSON files | ✅ `_get_load_balancers_info()` |
+| `check_route53()` | Hosted zones, record sets | ✅ `_get_route53_info()` |
+| `check_cloudtrail_logs()` | CloudTrail events JSON | ✅ `_get_cloud_trail_logs()` |
+| `check_installation_status()` | Cluster JSON, resources JSON | ✅ `_get_ocm_cluster_info()` |
+
+### With Pytest Test Framework
+
+`get_install_artifacts.py` also collects **all data files** that the pytest test framework requires:
+
+| Test Module | Files Required | Provided by get_install_artifacts.py |
+|-------------|----------------|--------------------------------------|
+| `test_security_groups.py` | Security groups JSON | ✅ `_get_security_groups_info()` |
+| `test_vpc.py` | VPC files, DNS attributes, DHCP options | ✅ `_populate_vpc_info_files()`, `_get_network_infrastructure()` |
+| `test_instances.py` | EC2 instances JSON, zone-specific instances | ✅ `_get_ec2_instance_info()`, `_collect_zone_specific_artifacts()` |
+| `test_load_balancers.py` | Load balancers, target groups, target health | ✅ `_get_load_balancers_info()` |
+| `test_route53.py` | Hosted zones, record sets | ✅ `_get_route53_info()` |
+| `test_cloudtrail.py` | CloudTrail events JSON | ✅ `_get_cloud_trail_logs()` |
+| `test_installation.py` | Cluster JSON, resources JSON | ✅ `_get_ocm_cluster_info()` |
+
+### Additional Infrastructure Data (New)
+
+Beyond the legacy checks, `get_install_artifacts.py` now collects comprehensive infrastructure data:
+
+| Resource Type | Collection Method | Use Case |
+|--------------|-------------------|----------|
+| Subnets | `_get_network_infrastructure()` | Multi-AZ subnet validation |
+| Route Tables | `_get_network_infrastructure()` | IGW and NAT routing validation |
+| Internet Gateways | `_get_network_infrastructure()` | Public cluster connectivity |
+| NAT Gateways | `_get_network_infrastructure()` | Private subnet egress |
+| Network Interfaces | `_get_network_infrastructure()` | ENI attachment details |
+| Network ACLs | `_get_network_infrastructure()` | Network filtering layer |
+| Elastic IPs | `_get_network_infrastructure()` | NAT gateway IPs |
+| VPC Peering | `_get_network_infrastructure()` | VPC peering validation |
+| VPC Flow Logs | `_get_network_infrastructure()` | Network monitoring |
+| EBS Volumes | `_get_network_infrastructure()` | etcd volume validation |
+| Target Groups | `_get_load_balancers_info()` | LB backend health |
+| Target Health | `_get_load_balancers_info()` | Backend instance health |
+| Classic ELBs | `_get_load_balancers_info()` | Legacy load balancer support |
+| Zone-specific artifacts* | `_collect_zone_specific_artifacts()` | Multi-AZ HA validation |
+
+\* **Multi-AZ clusters only**: When `multi_az=true`, collects per-zone subnets, NAT gateways, instances, and volumes
 
 ---
 
