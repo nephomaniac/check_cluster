@@ -241,9 +241,18 @@ class HTMLReportGenerator:
             duration = test.get('duration', 0)
             status_class = self._get_status_class(outcome)
 
-            # Get docstring and parse description
-            test_doc = test.get('test_doc', test_name.replace('test_', '').replace('_', ' ').title())
-            full_docstring = test.get('user_properties', {})
+            # Get docstring from user_properties (stored by pytest hook)
+            test_doc = None
+            user_properties = test.get('user_properties', [])
+            if user_properties and isinstance(user_properties, list):
+                for prop in user_properties:
+                    if isinstance(prop, dict) and 'test_doc' in prop:
+                        test_doc = prop['test_doc']
+                        break
+
+            # Fallback to generated title if no docstring found
+            if not test_doc:
+                test_doc = test_name.replace('test_', '').replace('_', ' ').title()
 
             # Parse docstring for description parts
             description_html = self._parse_test_description(test_doc)
