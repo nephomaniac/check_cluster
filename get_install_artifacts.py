@@ -1052,8 +1052,14 @@ class ClusterDataCollector:
         self.domain_prefix = self.cluster_data.get('domain_prefix')
         self.cluster_state = self.cluster_data.get('state')
         self.private_link = self.cluster_data.get('aws', {}).get('private_link', False)
+        self.multi_az = self.cluster_data.get('multi_az', False)
+        self.availability_zones = self.cluster_data.get('nodes', {}).get('availability_zones', [])
 
         print(f"Using DOMAIN_PREFIX:{self.domain_prefix}, INFRA_ID:{self.infra_id}")
+        if self.multi_az:
+            Colors.blue(f"Multi-AZ cluster detected with zones: {', '.join(self.availability_zones)}")
+        else:
+            Colors.blue(f"Single-AZ cluster in zone: {self.availability_zones[0] if self.availability_zones else 'unknown'}")
 
         # Get cluster context
         cluster_ctx_file = f"{self.file_prefix}_cluster_context.json"
@@ -1571,6 +1577,115 @@ class ClusterDataCollector:
                     json.dump(response, f, indent=2, default=str)
             except Exception as e:
                 Colors.perr(f"Failed to fetch EBS volumes: {str(e)}")
+
+        # Multi-AZ zone-specific collection
+        if self.multi_az and self.availability_zones:
+            Colors.hdr(f"Collecting zone-specific artifacts for multi-AZ cluster ({len(self.availability_zones)} zones)")
+            self._collect_zone_specific_artifacts()
+
+    def _collect_zone_specific_artifacts(self):
+        """Collect zone-specific artifacts for multi-AZ clusters"""
+        for zone in self.availability_zones:
+            Colors.blue(f"Collecting artifacts for availability zone: {zone}")
+
+            # Subnets per zone
+            zone_subnets_file = f"{self.file_prefix}_{zone}_subnets.json"
+            if Path(zone_subnets_file).exists():
+                Colors.green(f"Using existing zone subnets file: {zone_subnets_file}")
+            else:
+                try:
+                    response = self.aws.describe_subnets(
+                        filters=[
+                            {'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']},
+                            {'Name': 'availability-zone', 'Values': [zone]}
+                        ]
+                    )
+                    with open(zone_subnets_file, 'w') as f:
+                        json.dump(response, f, indent=2, default=str)
+
+                    subnet_count = len(response.get('Subnets', []))
+                    Colors.green(f"  Found {subnet_count} subnet(s) in {zone}")
+                except Exception as e:
+                    Colors.perr(f"Failed to fetch subnets for {zone}: {str(e)}")
+
+            # NAT Gateways per zone
+            zone_nat_file = f"{self.file_prefix}_{zone}_nat_gateways.json"
+            if Path(zone_nat_file).exists():
+                Colors.green(f"Using existing zone NAT gateways file: {zone_nat_file}")
+            else:
+                try:
+                    # Get subnets in this zone first to filter NAT gateways
+                    if Path(zone_subnets_file).exists():
+                        with open(zone_subnets_file) as f:
+                            zone_subnet_data = json.load(f)
+                        zone_subnet_ids = [s['SubnetId'] for s in zone_subnet_data.get('Subnets', [])]
+
+                        if zone_subnet_ids:
+                            response = self.aws.describe_nat_gateways(
+                                filters=[
+                                    {'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']},
+                                    {'Name': 'subnet-id', 'Values': zone_subnet_ids}
+                                ]
+                            )
+                            with open(zone_nat_file, 'w') as f:
+                                json.dump(response, f, indent=2, default=str)
+
+                            nat_count = len(response.get('NatGateways', []))
+                            Colors.green(f"  Found {nat_count} NAT gateway(s) in {zone}")
+                except Exception as e:
+                    Colors.perr(f"Failed to fetch NAT gateways for {zone}: {str(e)}")
+
+            # Instances per zone
+            zone_instances_file = f"{self.file_prefix}_{zone}_instances.json"
+            if Path(zone_instances_file).exists():
+                Colors.green(f"Using existing zone instances file: {zone_instances_file}")
+            else:
+                try:
+                    response = self.aws.describe_instances(
+                        filters=[
+                            {'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']},
+                            {'Name': 'availability-zone', 'Values': [zone]}
+                        ]
+                    )
+
+                    # Flatten instances
+                    instances = []
+                    for reservation in response.get('Reservations', []):
+                        for instance in reservation.get('Instances', []):
+                            instances.append({
+                                'InstanceId': instance.get('InstanceId'),
+                                'State': instance.get('State', {}).get('Name'),
+                                'InstanceType': instance.get('InstanceType'),
+                                'AvailabilityZone': instance.get('Placement', {}).get('AvailabilityZone'),
+                                'Tags': instance.get('Tags', [])
+                            })
+
+                    with open(zone_instances_file, 'w') as f:
+                        json.dump({'Instances': instances}, f, indent=2)
+
+                    Colors.green(f"  Found {len(instances)} instance(s) in {zone}")
+                except Exception as e:
+                    Colors.perr(f"Failed to fetch instances for {zone}: {str(e)}")
+
+            # EBS Volumes per zone
+            zone_volumes_file = f"{self.file_prefix}_{zone}_volumes.json"
+            if Path(zone_volumes_file).exists():
+                Colors.green(f"Using existing zone volumes file: {zone_volumes_file}")
+            else:
+                try:
+                    response = self.aws.describe_volumes(
+                        filters=[
+                            {'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']},
+                            {'Name': 'availability-zone', 'Values': [zone]}
+                        ]
+                    )
+                    with open(zone_volumes_file, 'w') as f:
+                        json.dump(response, f, indent=2, default=str)
+
+                    volume_count = len(response.get('Volumes', []))
+                    Colors.green(f"  Found {volume_count} volume(s) in {zone}")
+                except Exception as e:
+                    Colors.perr(f"Failed to fetch volumes for {zone}: {str(e)}")
 
     def _get_ec2_instance_info(self):
         """Fetch EC2 instance information, metrics, and console logs"""
