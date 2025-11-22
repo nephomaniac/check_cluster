@@ -224,47 +224,135 @@ class HTMLReportGenerator:
         return '\n'.join(html_parts)
 
     def _generate_tests_html(self, tests: List[Dict[str, Any]]) -> str:
-        """Generate HTML for test results"""
+        """Generate HTML for test results with collapsible details"""
         html_parts = []
 
-        for test in tests:
-            # Extract test name from nodeid
+        for idx, test in enumerate(tests):
+            # Extract test information
             nodeid = test.get('nodeid', '')
             test_name = nodeid.split('::')[-1] if '::' in nodeid else nodeid
+            test_id = f"test-{idx}-{test_name.replace('_', '-')}"
+
+            # Extract module and line number
+            module_path = nodeid.split('::')[0] if '::' in nodeid else ''
+            lineno = test.get('lineno', 'N/A')
 
             outcome = test.get('outcome', 'unknown')
             duration = test.get('duration', 0)
             status_class = self._get_status_class(outcome)
 
-            # Get failure message if test failed
+            # Get docstring and parse description
+            test_doc = test.get('test_doc', test_name.replace('test_', '').replace('_', ' ').title())
+            full_docstring = test.get('user_properties', {})
+
+            # Parse docstring for description parts
+            description_html = self._parse_test_description(test_doc)
+
+            # Get failure/skip reason
             call_info = test.get('call', {})
             longrepr = call_info.get('longrepr', '')
 
-            details = ''
+            status_reason = ''
             if outcome == 'failed' and longrepr:
                 # Extract assertion message
                 if 'AssertionError: ' in longrepr:
-                    details = longrepr.split('AssertionError: ')[-1].split('\n')[0]
+                    status_reason = longrepr.split('AssertionError: ')[-1].split('\n')[0]
                 else:
-                    details = longrepr.split('\n')[0] if '\n' in longrepr else longrepr[:200]
+                    status_reason = longrepr.split('\n')[0] if '\n' in longrepr else longrepr[:200]
             elif outcome == 'skipped':
-                # Get skip reason
-                details = call_info.get('longrepr', 'Skipped')
+                status_reason = call_info.get('longrepr', 'Skipped')
+            elif outcome == 'passed':
+                status_reason = 'All validations passed'
 
-            # Get test docstring
-            test_doc = test_name.replace('test_', '').replace('_', ' ').title()
+            # Get short display name
+            display_name = test_name.replace('test_', '').replace('_', ' ').title()
 
             html_parts.append(f"""
                         <tr class="{status_class}">
-                            <td class="test-name">{test_doc}</td>
+                            <td class="test-name">{display_name}</td>
                             <td class="test-status">
                                 <span class="status-badge {status_class}">{outcome.upper()}</span>
                             </td>
                             <td class="test-duration">{self._format_test_duration(duration)}</td>
-                            <td class="test-details">{details}</td>
+                            <td class="test-details-cell">
+                                <button class="details-toggle" onclick="toggleTestDetails('{test_id}')">
+                                    <span class="toggle-arrow">►</span> View Details
+                                </button>
+                            </td>
+                        </tr>
+                        <tr class="test-details-row hidden" id="{test_id}">
+                            <td colspan="4">
+                                <div class="test-details-content">
+                                    <div class="detail-section">
+                                        <h4>Test Information</h4>
+                                        <div class="detail-grid">
+                                            <div class="detail-item">
+                                                <span class="detail-label">Module:</span>
+                                                <span class="detail-value"><code>{module_path}</code></span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Line:</span>
+                                                <span class="detail-value">{lineno}</span>
+                                            </div>
+                                            <div class="detail-item">
+                                                <span class="detail-label">Status:</span>
+                                                <span class="detail-value status-{outcome}">{outcome.upper()}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="detail-section">
+                                        <h4>Status Reason</h4>
+                                        <div class="status-reason {status_class}">{status_reason}</div>
+                                    </div>
+                                    <div class="detail-section">
+                                        <h4>Test Description</h4>
+                                        {description_html}
+                                    </div>
+                                </div>
+                            </td>
                         </tr>""")
 
         return '\n'.join(html_parts)
+
+    def _parse_test_description(self, docstring: str) -> str:
+        """Parse test docstring into structured HTML"""
+        if not docstring:
+            return '<p class="no-description">No description available</p>'
+
+        # Split docstring into parts
+        lines = docstring.split('\n')
+        brief = lines[0].strip() if lines else 'No description'
+
+        # Look for Why: and Failure indicates: sections
+        why_text = ''
+        failure_text = ''
+
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line.startswith('Why:'):
+                why_text = line[4:].strip()
+                # Collect continuation lines
+                j = i + 1
+                while j < len(lines) and lines[j].strip() and not lines[j].strip().startswith('Failure'):
+                    why_text += ' ' + lines[j].strip()
+                    j += 1
+            elif line.startswith('Failure indicates:'):
+                failure_text = line[18:].strip()
+                # Collect continuation lines
+                j = i + 1
+                while j < len(lines) and lines[j].strip():
+                    failure_text += ' ' + lines[j].strip()
+                    j += 1
+
+        html = f'<p class="test-brief"><strong>{brief}</strong></p>'
+
+        if why_text:
+            html += f'<p class="test-why"><strong>Why:</strong> {why_text}</p>'
+
+        if failure_text:
+            html += f'<p class="test-failure"><strong>Failure indicates:</strong> {failure_text}</p>'
+
+        return html
 
     def _generate_css(self) -> str:
         """Generate CSS styles"""
@@ -532,6 +620,164 @@ class HTMLReportGenerator:
         .status-fail .test-details {
             color: #721c24;
         }
+
+        /* Collapsible test details */
+        .test-details-cell {
+            text-align: center;
+        }
+
+        .details-toggle {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .details-toggle:hover {
+            background: #0056b3;
+        }
+
+        .toggle-arrow {
+            transition: transform 0.2s;
+            font-size: 10px;
+        }
+
+        .details-toggle.expanded .toggle-arrow {
+            transform: rotate(90deg);
+        }
+
+        .test-details-row {
+            background: #f8f9fa;
+        }
+
+        .test-details-row.hidden {
+            display: none;
+        }
+
+        .test-details-content {
+            padding: 20px;
+            border-left: 4px solid #007bff;
+        }
+
+        .detail-section {
+            margin-bottom: 20px;
+        }
+
+        .detail-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .detail-section h4 {
+            color: #2c3e50;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .detail-value {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .detail-value code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .detail-value.status-passed {
+            color: #27ae60;
+            font-weight: 600;
+        }
+
+        .detail-value.status-failed {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+
+        .detail-value.status-skipped {
+            color: #f39c12;
+            font-weight: 600;
+        }
+
+        .status-reason {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 12px;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .status-reason.status-fail {
+            background: #fff5f5;
+            border-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-reason.status-skip {
+            background: #fffef5;
+            border-color: #fff3cd;
+            color: #856404;
+        }
+
+        .test-brief {
+            font-size: 15px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+
+        .test-why {
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+            color: #555;
+        }
+
+        .test-failure {
+            font-size: 14px;
+            line-height: 1.6;
+            color: #555;
+        }
+
+        .no-description {
+            font-size: 14px;
+            color: #999;
+            font-style: italic;
+        }
     </style>"""
 
     def _generate_javascript(self) -> str:
@@ -548,6 +794,23 @@ class HTMLReportGenerator:
             } else {
                 content.classList.add('hidden');
                 header.classList.add('collapsed');
+            }
+        }
+
+        function toggleTestDetails(testId) {
+            const detailsRow = document.getElementById(testId);
+            const button = event.target.closest('button');
+
+            if (detailsRow.classList.contains('hidden')) {
+                detailsRow.classList.remove('hidden');
+                button.classList.add('expanded');
+                button.querySelector('.toggle-arrow').textContent = '▼';
+                button.innerHTML = button.innerHTML.replace('View Details', 'Hide Details');
+            } else {
+                detailsRow.classList.add('hidden');
+                button.classList.remove('expanded');
+                button.querySelector('.toggle-arrow').textContent = '►';
+                button.innerHTML = button.innerHTML.replace('Hide Details', 'View Details');
             }
         }
 

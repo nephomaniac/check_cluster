@@ -10,7 +10,14 @@ from models.cluster import ClusterData
 
 @pytest.mark.route53
 def test_hosted_zone_exists(cluster_data: ClusterData):
-    """Cluster must have a Route53 hosted zone"""
+    """Cluster must have a Route53 hosted zone.
+
+    Why: Route53 hosted zones provide DNS resolution for cluster API endpoints and
+    internal service discovery. They are essential for cluster accessibility.
+
+    Failure indicates: DNS hosting is not configured, which would prevent DNS resolution
+    for the cluster API and could indicate incomplete cluster setup.
+    """
     zones = cluster_data.route53_zones
 
     if not zones:
@@ -81,7 +88,14 @@ def test_hosted_zone_has_name_servers(cluster_data: ClusterData):
 
 @pytest.mark.route53
 def test_cluster_domain_configured(cluster_data: ClusterData):
-    """Cluster must have a domain configured"""
+    """Cluster must have a domain configured.
+
+    Why: The base domain is used for all cluster DNS records including the API endpoint,
+    router wildcard, and application routes. It's fundamental to cluster addressing.
+
+    Failure indicates: The cluster domain is not configured in metadata, which would prevent
+    proper DNS setup and could indicate incomplete installation configuration.
+    """
     domain = cluster_data.cluster_json.get('dns', {}).get('baseDomain', '')
 
     if not domain:

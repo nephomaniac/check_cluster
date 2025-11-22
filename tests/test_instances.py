@@ -36,14 +36,28 @@ def get_instances_by_role(cluster_data: ClusterData, role: str) -> list:
 
 @pytest.mark.instances
 def test_instances_exist(cluster_data: ClusterData):
-    """Cluster must have EC2 instances"""
+    """Cluster must have EC2 instances.
+
+    Why: ROSA clusters require EC2 instances to run both control plane and worker nodes.
+    Without instances, the cluster cannot function.
+
+    Failure indicates: The cluster has no compute infrastructure, suggesting incomplete
+    installation, catastrophic infrastructure failure, or incorrect data collection.
+    """
     assert cluster_data.ec2_instances, "No EC2 instances found"
     assert len(cluster_data.ec2_instances) > 0, "EC2 instance list is empty"
 
 
 @pytest.mark.instances
 def test_control_plane_instances_running(cluster_data: ClusterData):
-    """Control plane instances must be in running state"""
+    """Control plane instances must be in running state.
+
+    Why: Control plane instances host the Kubernetes API server, etcd, and other critical
+    cluster services. Non-running control plane instances prevent cluster management and workload operations.
+
+    Failure indicates: Control plane instances are stopped, stopping, or terminated. This could indicate
+    infrastructure issues, manual intervention, or cluster degradation requiring immediate attention.
+    """
     masters = get_instances_by_role(cluster_data, 'master')
 
     if not masters:
@@ -68,7 +82,14 @@ def test_control_plane_instances_running(cluster_data: ClusterData):
 
 @pytest.mark.instances
 def test_worker_instances_running(cluster_data: ClusterData):
-    """Worker instances must be in running state"""
+    """Worker instances must be in running state.
+
+    Why: Worker nodes run application workloads and cluster operators. Non-running workers
+    reduce cluster capacity and may prevent workloads from scheduling or running.
+
+    Failure indicates: Worker instances are stopped, stopping, or terminated. This could indicate
+    auto-scaling issues, infrastructure failures, or capacity problems affecting workload availability.
+    """
     workers = get_instances_by_role(cluster_data, 'worker')
 
     if not workers:
@@ -93,7 +114,14 @@ def test_worker_instances_running(cluster_data: ClusterData):
 
 @pytest.mark.instances
 def test_instances_have_private_ips(cluster_data: ClusterData):
-    """All instances must have private IP addresses"""
+    """All instances must have private IP addresses.
+
+    Why: Private IP addresses are required for node-to-node communication, pod networking,
+    and cluster service discovery. Without private IPs, nodes cannot participate in the cluster.
+
+    Failure indicates: Instances were terminated or networking failed to initialize. This prevents
+    the instance from joining the cluster and requires investigation of EC2 networking configuration.
+    """
     instances_without_ip = []
 
     for instance in cluster_data.ec2_instances:
@@ -130,7 +158,14 @@ def test_instances_in_vpc(cluster_data: ClusterData, vpc_cidr: str):
 
 @pytest.mark.instances
 def test_instances_have_security_groups(cluster_data: ClusterData):
-    """All instances must have security groups attached"""
+    """All instances must have security groups attached.
+
+    Why: Security groups control network traffic to and from instances. Missing security groups
+    would either block all traffic (preventing cluster operation) or allow unrestricted access (security risk).
+
+    Failure indicates: Instance networking is misconfigured. This could prevent cluster communication
+    or indicate incomplete instance initialization requiring investigation.
+    """
     instances_without_sgs = []
 
     for instance in cluster_data.ec2_instances:
@@ -146,7 +181,14 @@ def test_instances_have_security_groups(cluster_data: ClusterData):
 
 @pytest.mark.instances
 def test_control_plane_instance_count(cluster_data: ClusterData):
-    """Control plane should have 3 instances for HA"""
+    """Control plane should have 3 instances for HA.
+
+    Why: ROSA production clusters deploy 3 control plane instances for high availability
+    and etcd quorum requirements. This ensures cluster resilience during single-node failures.
+
+    Failure indicates: The cluster has fewer or more than 3 control plane instances, indicating
+    either incomplete deployment, instance failure, or non-standard configuration that may affect availability.
+    """
     masters = get_instances_by_role(cluster_data, 'master')
 
     if not masters:
@@ -160,7 +202,14 @@ def test_control_plane_instance_count(cluster_data: ClusterData):
 
 @pytest.mark.instances
 def test_instances_have_cluster_tags(cluster_data: ClusterData):
-    """All instances must have cluster ownership tags"""
+    """All instances must have cluster ownership tags.
+
+    Why: Cluster ownership tags (kubernetes.io/cluster/<infra-id>) enable Kubernetes cloud controllers
+    to identify and manage cluster resources. Missing tags prevent automatic lifecycle management.
+
+    Failure indicates: Instances are missing required cluster identification tags. This could prevent
+    cloud provider integrations from working correctly and may indicate incomplete instance provisioning.
+    """
     infra_id = cluster_data.infra_id
     instances_without_tags = []
 

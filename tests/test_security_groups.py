@@ -124,7 +124,14 @@ def find_rule_for_traffic(sgs: dict, sg_names: list[str], protocol: str,
 
 @pytest.mark.security_groups
 def test_api_server_access(cluster_data: ClusterData, is_private_cluster: bool):
-    """Kubernetes API Server must be accessible on port 6443"""
+    """Kubernetes API Server must be accessible on port 6443.
+
+    Why: Port 6443 is the standard Kubernetes API server port. kubectl, oc, and all
+    cluster management tools require access to this port to manage the cluster.
+
+    Failure indicates: The API load balancer security group is not allowing inbound traffic
+    on port 6443, which would prevent all cluster management operations.
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -140,7 +147,14 @@ def test_api_server_access(cluster_data: ClusterData, is_private_cluster: bool):
 
 @pytest.mark.security_groups
 def test_machine_config_server_access(cluster_data: ClusterData, is_private_cluster: bool):
-    """Machine Config Server must be accessible on port 22623"""
+    """Machine Config Server must be accessible on port 22623.
+
+    Why: The Machine Config Server (MCS) on port 22623 provides Ignition configs
+    and machine configuration to nodes during bootstrap and updates.
+
+    Failure indicates: Security group rules are blocking MCS access, which would prevent
+    nodes from retrieving configuration and joining the cluster properly.
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -205,7 +219,14 @@ def test_worker_ssh_access(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_worker_kubelet_access(cluster_data: ClusterData):
-    """Worker nodes must allow kubelet API access on port 10250"""
+    """Worker nodes must allow kubelet API access on port 10250.
+
+    Why: The kubelet API on port 10250 is used by the control plane to monitor node
+    health, execute commands in pods (exec/logs), and manage container lifecycle.
+
+    Failure indicates: Security group is blocking kubelet access, which would prevent
+    pod operations like kubectl exec, kubectl logs, and health monitoring.
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -235,7 +256,14 @@ def test_worker_nodeport_access(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_worker_vxlan_overlay(cluster_data: ClusterData):
-    """Worker nodes must allow VXLAN overlay network on UDP port 4789"""
+    """Worker nodes must allow VXLAN overlay network on UDP port 4789.
+
+    Why: VXLAN (UDP 4789) is used by OpenShift SDN for pod-to-pod networking across nodes.
+    This is essential for container network overlay functionality.
+
+    Failure indicates: The overlay network cannot function, preventing pod-to-pod communication
+    across different nodes and breaking application connectivity.
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -250,7 +278,14 @@ def test_worker_vxlan_overlay(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_worker_geneve_overlay(cluster_data: ClusterData):
-    """Worker nodes must allow Geneve overlay network on UDP port 6081"""
+    """Worker nodes must allow Geneve overlay network on UDP port 6081.
+
+    Why: Geneve (UDP 6081) is used by OVN-Kubernetes for pod networking. It provides
+    the network overlay for pod-to-pod communication in OVN-based clusters.
+
+    Failure indicates: OVN overlay networking is blocked, preventing pod-to-pod communication
+    across nodes and breaking network connectivity for workloads.
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -284,7 +319,14 @@ def test_worker_internal_communication(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_all_egress_allowed(cluster_data: ClusterData):
-    """All security groups must allow outbound traffic"""
+    """All security groups must allow outbound traffic.
+
+    Why: Cluster nodes need outbound connectivity to pull container images, access AWS APIs,
+    communicate with external services, and download updates.
+
+    Failure indicates: Egress rules are too restrictive, which would prevent nodes from pulling
+    images, accessing cloud APIs, or communicating with external dependencies.
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
 
     all_sg_names = list(sgs.keys())

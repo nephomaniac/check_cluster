@@ -10,20 +10,41 @@ from models.cluster import ClusterData
 
 @pytest.mark.installation
 def test_cluster_has_id(cluster_data: ClusterData):
-    """Cluster must have a cluster ID"""
+    """Cluster must have a cluster ID.
+
+    Why: The cluster ID is a unique identifier used by ROSA for cluster management,
+    billing, and API operations. All cluster resources reference this ID.
+
+    Failure indicates: Critical cluster metadata is missing from the configuration,
+    suggesting incomplete installation or corrupted cluster data.
+    """
     assert cluster_data.cluster_id, "Cluster ID not found"
 
 
 @pytest.mark.installation
 def test_cluster_has_infra_id(cluster_data: ClusterData):
-    """Cluster must have an infrastructure ID"""
+    """Cluster must have an infrastructure ID.
+
+    Why: The infrastructure ID (infra_id) prefixes all AWS resource names and tags
+    for cluster ownership. It's essential for resource discovery and lifecycle management.
+
+    Failure indicates: Critical infrastructure metadata is missing, preventing proper
+    resource identification and potentially causing resource management failures.
+    """
     infra_id = cluster_data.infra_id
     assert infra_id, "Infrastructure ID not found"
 
 
 @pytest.mark.installation
 def test_cluster_state(cluster_data: ClusterData):
-    """Cluster should be in ready/installed state"""
+    """Cluster should be in ready/installed state.
+
+    Why: The cluster state reflects the overall health and lifecycle stage. Only
+    clusters in 'ready', 'installed', or 'active' state are fully operational.
+
+    Failure indicates: The cluster is not in an operational state. It may be installing,
+    upgrading, degraded, or in error state requiring investigation of cluster operators.
+    """
     state = cluster_data.cluster_json.get('state', '').lower()
 
     if not state:
@@ -37,7 +58,14 @@ def test_cluster_state(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_version(cluster_data: ClusterData):
-    """Cluster must have OpenShift version specified"""
+    """Cluster must have OpenShift version specified.
+
+    Why: The OpenShift version determines available features, API compatibility,
+    and supported configurations. Version information is required for upgrades and support.
+
+    Failure indicates: Version metadata is missing or malformed, which could indicate
+    incomplete installation or data collection issues.
+    """
     version = cluster_data.cluster_json.get('openshift_version', '')
 
     if not version:
@@ -49,7 +77,14 @@ def test_cluster_version(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_region(cluster_data: ClusterData):
-    """Cluster must be deployed in an AWS region"""
+    """Cluster must be deployed in an AWS region.
+
+    Why: The AWS region defines where cluster resources are located and affects
+    availability, compliance, and performance characteristics.
+
+    Failure indicates: Region metadata is missing or invalid, which could prevent
+    proper resource management and regional service configurations.
+    """
     region = cluster_data.cluster_json.get('region', {}).get('id', '')
 
     if not region:
@@ -62,7 +97,14 @@ def test_cluster_region(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_api_url(cluster_data: ClusterData):
-    """Cluster must have API URL configured"""
+    """Cluster must have API URL configured.
+
+    Why: The API URL is the primary endpoint for cluster management via kubectl
+    and oc commands. Without it, cluster administration is impossible.
+
+    Failure indicates: The Kubernetes API endpoint is not configured or DNS records
+    are missing, preventing cluster access and management operations.
+    """
     api_url = cluster_data.cluster_json.get('api', {}).get('url', '')
 
     assert api_url, "API URL not configured"
@@ -82,7 +124,14 @@ def test_cluster_console_url(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_has_nodes(cluster_data: ClusterData):
-    """Cluster must have nodes configured"""
+    """Cluster must have nodes configured.
+
+    Why: Compute nodes are required to run workloads. A cluster without compute
+    capacity cannot schedule or execute any pods or applications.
+
+    Failure indicates: No compute nodes are configured in the cluster specification,
+    suggesting incomplete installation or severe cluster degradation.
+    """
     nodes = cluster_data.cluster_json.get('nodes', {})
 
     if not nodes:
@@ -98,7 +147,14 @@ def test_cluster_has_nodes(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_network_configured(cluster_data: ClusterData):
-    """Cluster must have network configuration"""
+    """Cluster must have network configuration.
+
+    Why: Pod and service CIDR blocks define the IP address space for container networking.
+    These are fundamental requirements for pod-to-pod and service communication.
+
+    Failure indicates: Core networking configuration is missing, which would prevent
+    pod networking from functioning and make the cluster inoperable.
+    """
     network = cluster_data.cluster_json.get('network', {})
 
     if not network:
@@ -147,7 +203,14 @@ def test_cluster_multi_az(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_subscription_type(cluster_data: ClusterData):
-    """Cluster should have valid subscription"""
+    """Cluster should have valid subscription.
+
+    Why: The subscription type determines billing, support entitlements, and
+    available features for the ROSA cluster.
+
+    Failure indicates: Subscription metadata is missing, which may indicate issues
+    with cluster registration or incomplete provisioning through Red Hat.
+    """
     subscription = cluster_data.cluster_json.get('subscription', {})
 
     if not subscription:

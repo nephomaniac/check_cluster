@@ -10,7 +10,14 @@ from models.cluster import ClusterData
 
 @pytest.mark.vpc
 def test_vpc_exists(cluster_data: ClusterData):
-    """VPC must exist and be configured"""
+    """VPC must exist and be configured.
+
+    Why: The VPC provides network isolation and contains all cluster networking resources
+    including subnets, route tables, and network ACLs.
+
+    Failure indicates: VPC data is missing or incomplete, suggesting the cluster has no
+    network infrastructure or data collection failed.
+    """
     vpcs = cluster_data.vpcs
     assert vpcs, "No VPC data found"
 
@@ -21,7 +28,14 @@ def test_vpc_exists(cluster_data: ClusterData):
 
 @pytest.mark.vpc
 def test_vpc_dns_hostnames_enabled(cluster_data: ClusterData):
-    """VPC must have DNS hostnames enabled for internal hostname resolution"""
+    """VPC must have DNS hostnames enabled for internal hostname resolution.
+
+    Why: DNS hostnames allow EC2 instances to receive DNS names, enabling service
+    discovery and internal communication using hostnames instead of IPs.
+
+    Failure indicates: The VPC is not configured for DNS hostnames, which could prevent
+    proper service discovery and internal DNS resolution within the cluster.
+    """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
@@ -36,7 +50,14 @@ def test_vpc_dns_hostnames_enabled(cluster_data: ClusterData):
 
 @pytest.mark.vpc
 def test_vpc_dns_support_enabled(cluster_data: ClusterData):
-    """VPC must have DNS support enabled for DNS resolution"""
+    """VPC must have DNS support enabled for DNS resolution.
+
+    Why: DNS support enables the Amazon-provided DNS server at the VPC CIDR +2 address,
+    which is required for resolving internal and external DNS queries.
+
+    Failure indicates: DNS resolution within the VPC is disabled, which would prevent
+    nodes from resolving DNS names and break critical cluster functionality.
+    """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:

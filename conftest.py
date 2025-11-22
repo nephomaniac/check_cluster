@@ -104,3 +104,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "installation: Installation status tests"
     )
+
+
+def pytest_runtest_makereport(item, call):
+    """Hook to capture test docstrings for JSON report"""
+    if call.when == "call":
+        # Get the test function's docstring
+        if item.function.__doc__:
+            # Store docstring as user property for JSON report
+            item.user_properties.append(("test_doc", item.function.__doc__))
