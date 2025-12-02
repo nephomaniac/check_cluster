@@ -303,6 +303,7 @@ class AWSCollector:
         self.cloudtrail = session.client('cloudtrail', region_name=self.region, **client_kwargs)
         self.cloudwatch = session.client('cloudwatch', region_name=self.region, **client_kwargs)
         self.sts = session.client('sts', region_name=self.region, **client_kwargs)
+        self.iam = session.client('iam', **client_kwargs)
 
     def validate_credentials(self, cluster_data: Dict = None, cluster_id: str = None,
                            show_header: bool = True) -> bool:
@@ -1020,6 +1021,46 @@ class AWSCollector:
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'list KMS keys')
 
+    def get_iam_role(self, role_name: str) -> Dict:
+        """Get IAM role details"""
+        print(f"aws iam get-role --role-name {role_name} --output json")
+        try:
+            return self.iam.get_role(RoleName=role_name)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, f'get IAM role {role_name}')
+
+    def list_role_policies(self, role_name: str) -> Dict:
+        """List inline policies for IAM role"""
+        print(f"aws iam list-role-policies --role-name {role_name} --output json")
+        try:
+            return self.iam.list_role_policies(RoleName=role_name)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, f'list role policies for {role_name}')
+
+    def list_attached_role_policies(self, role_name: str) -> Dict:
+        """List attached managed policies for IAM role"""
+        print(f"aws iam list-attached-role-policies --role-name {role_name} --output json")
+        try:
+            return self.iam.list_attached_role_policies(RoleName=role_name)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, f'list attached role policies for {role_name}')
+
+    def list_open_id_connect_providers(self) -> Dict:
+        """List OIDC providers"""
+        print("aws iam list-open-id-connect-providers --output json")
+        try:
+            return self.iam.list_open_id_connect_providers()
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, 'list OIDC providers')
+
+    def get_open_id_connect_provider(self, oidc_provider_arn: str) -> Dict:
+        """Get OIDC provider details"""
+        print(f"aws iam get-open-id-connect-provider --open-id-connect-provider-arn {oidc_provider_arn} --output json")
+        try:
+            return self.iam.get_open_id_connect_provider(OpenIDConnectProviderArn=oidc_provider_arn)
+        except (self.ClientError, self.BotoCoreError) as e:
+            self._handle_aws_error(e, f'get OIDC provider {oidc_provider_arn}')
+
 
 class ClusterDataCollector:
     """Main collector class for ROSA cluster artifacts"""
@@ -1081,6 +1122,7 @@ class ClusterDataCollector:
         self._get_network_infrastructure()
         self._get_additional_infrastructure()
         self._get_vpc_endpoint_service_info()
+        self._get_iam_resources_from_cluster_json()
         self._get_ec2_instance_info()
         self._get_cloud_trail_logs()
         self._get_route53_info()
@@ -1636,6 +1678,198 @@ class ClusterDataCollector:
                     json.dump(response, f, indent=2, default=str)
             except Exception as e:
                 Colors.perr(f"Failed to fetch DNS support attribute: {str(e)}")
+
+    def _get_iam_resources_from_cluster_json(self):
+        """
+        Fetch IAM resources from cluster.json .aws section.
+
+        This method fetches IAM roles and OIDC providers specified in the cluster
+        configuration at .aws.sts. Resources include:
+        - Installer role (role_arn)
+        - Support role (support_role_arn)
+        - Instance IAM roles (master_role_arn, worker_role_arn)
+        - Operator IAM roles (operator_iam_roles array)
+        - OIDC provider (from oidc_endpoint_url)
+        """
+        Colors.hdr("Getting IAM resources from cluster.json")
+
+        # Check if cluster has STS configuration
+        aws_data = self.cluster_data.get('aws', {})
+        sts_data = aws_data.get('sts', {})
+
+        if not sts_data.get('enabled'):
+            Colors.yellow("STS not enabled - skipping IAM resource collection")
+            return
+
+        Colors.blue("Found STS configuration in cluster.json")
+
+        # Extract role ARNs
+        role_arns = []
+
+        # Core cluster roles
+        if sts_data.get('role_arn'):
+            role_arns.append(('installer', sts_data['role_arn']))
+        if sts_data.get('support_role_arn'):
+            role_arns.append(('support', sts_data['support_role_arn']))
+
+        # Instance IAM roles
+        instance_roles = sts_data.get('instance_iam_roles', {})
+        if instance_roles.get('master_role_arn'):
+            role_arns.append(('master', instance_roles['master_role_arn']))
+        if instance_roles.get('worker_role_arn'):
+            role_arns.append(('worker', instance_roles['worker_role_arn']))
+
+        # Operator IAM roles
+        operator_roles = sts_data.get('operator_iam_roles', [])
+        for op_role in operator_roles:
+            role_arn = op_role.get('role_arn')
+            namespace = op_role.get('namespace', 'unknown')
+            name = op_role.get('name', 'unknown')
+            if role_arn:
+                role_arns.append((f"operator-{namespace}-{name}", role_arn))
+
+        # Audit log role (may be empty)
+        audit_role_arn = aws_data.get('audit_log', {}).get('role_arn')
+        if audit_role_arn:
+            role_arns.append(('audit-log', audit_role_arn))
+
+        Colors.blue(f"Found {len(role_arns)} IAM role(s) to fetch")
+
+        # Fetch each IAM role
+        for role_type, role_arn in role_arns:
+            self._fetch_iam_role(role_type, role_arn)
+
+        # Fetch OIDC provider
+        oidc_url = sts_data.get('oidc_endpoint_url')
+        if oidc_url:
+            self._fetch_oidc_provider(oidc_url)
+        else:
+            Colors.yellow("No OIDC endpoint URL found in cluster.json")
+
+    def _fetch_iam_role(self, role_type: str, role_arn: str):
+        """
+        Fetch IAM role details and policies.
+
+        Args:
+            role_type: Type of role (installer, support, master, worker, operator-*)
+            role_arn: Full ARN of the IAM role
+        """
+        # Extract role name from ARN (format: arn:aws:iam::ACCOUNT:role/ROLE_NAME)
+        try:
+            role_name = role_arn.split('/')[-1]
+        except Exception as e:
+            Colors.perr(f"Failed to parse role name from ARN '{role_arn}': {str(e)}")
+            return
+
+        # Sanitize role_type for filename (replace special chars)
+        safe_role_type = role_type.replace('/', '-').replace(':', '-')
+
+        role_file = f"{self.file_prefix}_iam_role_{safe_role_type}_{role_name}.json"
+        policies_file = f"{self.file_prefix}_iam_role_{safe_role_type}_{role_name}_policies.json"
+        attached_policies_file = f"{self.file_prefix}_iam_role_{safe_role_type}_{role_name}_attached_policies.json"
+
+        # Fetch role details
+        if Path(role_file).exists():
+            Colors.green(f"Using existing IAM role file: {role_file}")
+        else:
+            Colors.blue(f"Fetching IAM role: {role_type} ({role_name})")
+            try:
+                response = self.aws.get_iam_role(role_name)
+                with open(role_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+                Colors.green(f"Saved IAM role to {role_file}")
+            except Exception as e:
+                Colors.perr(f"Failed to fetch IAM role {role_name}: {str(e)}")
+                return
+
+        # Fetch inline policies
+        if Path(policies_file).exists():
+            Colors.green(f"Using existing inline policies file: {policies_file}")
+        else:
+            Colors.blue(f"Fetching inline policies for {role_name}")
+            try:
+                response = self.aws.list_role_policies(role_name)
+                with open(policies_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch inline policies for {role_name}: {str(e)}")
+
+        # Fetch attached managed policies
+        if Path(attached_policies_file).exists():
+            Colors.green(f"Using existing attached policies file: {attached_policies_file}")
+        else:
+            Colors.blue(f"Fetching attached policies for {role_name}")
+            try:
+                response = self.aws.list_attached_role_policies(role_name)
+                with open(attached_policies_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch attached policies for {role_name}: {str(e)}")
+
+    def _fetch_oidc_provider(self, oidc_url: str):
+        """
+        Fetch OIDC provider details.
+
+        Args:
+            oidc_url: OIDC endpoint URL (e.g., https://oidc.example.com/cluster-id)
+        """
+        Colors.blue(f"Fetching OIDC provider for {oidc_url}")
+
+        # First list all OIDC providers to find matching ARN
+        oidc_list_file = f"{self.file_prefix}_oidc_providers_list.json"
+
+        if Path(oidc_list_file).exists():
+            Colors.green(f"Using existing OIDC providers list: {oidc_list_file}")
+            with open(oidc_list_file) as f:
+                providers_list = json.load(f)
+        else:
+            Colors.blue("Listing OIDC providers")
+            try:
+                providers_list = self.aws.list_open_id_connect_providers()
+                with open(oidc_list_file, 'w') as f:
+                    json.dump(providers_list, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to list OIDC providers: {str(e)}")
+                return
+
+        # Extract cluster ID from OIDC URL for matching
+        try:
+            # URL format: https://oidc.example.com/CLUSTER_ID
+            cluster_id_from_url = oidc_url.rstrip('/').split('/')[-1]
+        except Exception as e:
+            Colors.perr(f"Failed to parse cluster ID from OIDC URL: {str(e)}")
+            return
+
+        # Find matching OIDC provider ARN
+        matching_arn = None
+        for provider in providers_list.get('OpenIDConnectProviderList', []):
+            provider_arn = provider.get('Arn', '')
+            # ARN format: arn:aws:iam::ACCOUNT:oidc-provider/oidc.example.com/CLUSTER_ID
+            if cluster_id_from_url in provider_arn:
+                matching_arn = provider_arn
+                Colors.green(f"Found matching OIDC provider: {provider_arn}")
+                break
+
+        if not matching_arn:
+            Colors.perr(f"No OIDC provider found matching cluster ID: {cluster_id_from_url}")
+            return
+
+        # Fetch OIDC provider details
+        # Sanitize ARN for filename
+        safe_arn = matching_arn.replace('/', '-').replace(':', '-')
+        oidc_file = f"{self.file_prefix}_oidc_provider_{safe_arn}.json"
+
+        if Path(oidc_file).exists():
+            Colors.green(f"Using existing OIDC provider file: {oidc_file}")
+        else:
+            Colors.blue(f"Fetching OIDC provider details for {matching_arn}")
+            try:
+                response = self.aws.get_open_id_connect_provider(matching_arn)
+                with open(oidc_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+                Colors.green(f"Saved OIDC provider to {oidc_file}")
+            except Exception as e:
+                Colors.perr(f"Failed to fetch OIDC provider {matching_arn}: {str(e)}")
 
     def _get_network_infrastructure(self):
         """Fetch network infrastructure: subnets, route tables, gateways"""

@@ -104,6 +104,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "installation: Installation status tests"
     )
+    config.addinivalue_line(
+        "markers", "aws_resources: AWS IAM resources and OIDC provider tests"
+    )
 
 
 def pytest_runtest_makereport(item, call):
