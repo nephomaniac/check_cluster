@@ -154,18 +154,22 @@ def test_machine_config_server_access(cluster_data: ClusterData, is_private_clus
 
     Failure indicates: Security group rules are blocking MCS access, which would prevent
     nodes from retrieving configuration and joining the cluster properly.
+
+    Note: MCS should only be accessible via security groups (from cluster nodes),
+    never publicly accessible, regardless of cluster type.
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
     api_lb_sgs = [f"{infra_id}-lb", f"{infra_id}-apiserver-lb"]
-    source_type = "vpc" if is_private_cluster else "public"
+    # MCS should always be accessible via security groups, not public
+    source_type = "sg"
 
     found, details = find_rule_for_traffic(
         sgs, api_lb_sgs, "tcp", 22623, 22623, "ingress", source_type
     )
 
-    assert found, f"Machine Config Server (tcp/22623 ingress from {source_type}): {details}"
+    assert found, f"Machine Config Server (tcp/22623 ingress from security groups): {details}"
 
 
 @pytest.mark.security_groups

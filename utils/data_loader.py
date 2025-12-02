@@ -71,10 +71,30 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
     cluster_data.cluster_context = load_json_file(data_dir / f"{cluster_id}_cluster_context.json") or {}
     cluster_data.resources = load_json_file(data_dir / f"{cluster_id}_resources.json") or {}
 
-    # Load VPC info (may have multiple VPC files)
-    vpc_files = list(data_dir.glob(f"{cluster_id}_vpc-*.json")) + list(data_dir.glob(f"{cluster_id}_*_VPC.json"))
+    # Load VPC info (look for main VPC file, not attribute files)
+    vpc_files = [
+        f for f in data_dir.glob(f"{cluster_id}_vpc-*_VPC.json")
+        if not f.name.endswith(('_attrDnsHost.json', '_attrDnsSupp.json', '_attrEnableDns.json'))
+    ]
     if vpc_files:
         cluster_data.vpcs = load_json_file(vpc_files[0]) or {}
+
+        # Merge VPC DNS attributes into VPC data
+        if cluster_data.vpcs and 'Vpcs' in cluster_data.vpcs:
+            for vpc in cluster_data.vpcs['Vpcs']:
+                vpc_id = vpc.get('VpcId')
+                if vpc_id:
+                    # Load DNS hostname attribute
+                    dns_host_file = data_dir / f"{cluster_id}_{vpc_id}_VPC_attrDnsHost.json"
+                    dns_host_data = load_json_file(dns_host_file)
+                    if dns_host_data and 'EnableDnsHostnames' in dns_host_data:
+                        vpc['EnableDnsHostnames'] = dns_host_data['EnableDnsHostnames'].get('Value', False)
+
+                    # Load DNS support attribute
+                    dns_supp_file = data_dir / f"{cluster_id}_{vpc_id}_VPC_attrDnsSupp.json"
+                    dns_supp_data = load_json_file(dns_supp_file)
+                    if dns_supp_data and 'EnableDnsSupport' in dns_supp_data:
+                        vpc['EnableDnsSupport'] = dns_supp_data['EnableDnsSupport'].get('Value', False)
 
     # Load EC2 instances
     instances_file = data_dir / f"{cluster_id}_ec2_instances.json"
@@ -99,6 +119,14 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
     # Load Route53 data
     route53_files = list(data_dir.glob(f"{cluster_id}_hosted_zones.json"))
     if route53_files:
-        cluster_data.route53_zones = load_json_file(route53_files[0]) or {}
+        route53_data = load_json_file(route53_files[0])
+        if route53_data:
+            # Handle both list and dict formats
+            if isinstance(route53_data, list):
+                cluster_data.route53_zones = {'HostedZones': route53_data}
+            else:
+                cluster_data.route53_zones = route53_data
+        else:
+            cluster_data.route53_zones = {}
 
     return cluster_data

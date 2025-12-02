@@ -1073,6 +1073,10 @@ class ClusterDataCollector:
         self._determine_time_ranges()
 
         # Get AWS resources
+        # First try BYO VPC subnet fetch from cluster.json
+        self._get_subnets_and_vpcs_from_cluster_json()
+
+        # Then get VPCs and network infrastructure via tag-based discovery
         self._get_vpc_info()
         self._get_network_infrastructure()
         self._get_additional_infrastructure()
@@ -1492,6 +1496,147 @@ class ClusterDataCollector:
                         except Exception as e:
                             Colors.perr(f"Failed to fetch vpc endpoint connections for: {service_id}: {str(e)}")
 
+    def _get_subnets_and_vpcs_from_cluster_json(self):
+        """
+        Fetch subnets and VPCs from cluster.json subnet_ids.
+
+        This method handles BYO (Bring Your Own) VPC scenarios where subnet IDs
+        are provided in the cluster configuration at aws.subnet_ids.
+
+        For each subnet:
+        - Fetches subnet details from AWS
+        - Saves to individual file: <cluster_id>_<subnet_id>.json
+        - Extracts VPC ID
+
+        For each discovered VPC:
+        - Fetches VPC details from AWS
+        - Saves to file: <cluster_id>_<vpc_id>_VPC.json
+        - Fetches VPC DNS attributes
+        """
+        Colors.hdr("Getting subnets and VPCs from cluster.json")
+
+        # Check if cluster.json has subnet_ids
+        subnet_ids = self.cluster_data.get('aws', {}).get('subnet_ids', [])
+
+        if not subnet_ids:
+            Colors.yellow("No subnet_ids found in cluster.json aws.subnet_ids - skipping BYO VPC subnet fetch")
+            return
+
+        Colors.blue(f"Found {len(subnet_ids)} subnet IDs in cluster.json")
+
+        # Track VPC IDs discovered from subnets
+        discovered_vpc_ids = set()
+        fetched_subnets = []
+
+        # Fetch each subnet individually
+        for subnet_id in subnet_ids:
+            subnet_file = f"{self.file_prefix}_{subnet_id}.json"
+
+            if Path(subnet_file).exists():
+                Colors.green(f"Using existing subnet file: {subnet_file}")
+                # Load to get VPC ID
+                with open(subnet_file) as f:
+                    subnet_data = json.load(f)
+                    if 'Subnets' in subnet_data and subnet_data['Subnets']:
+                        vpc_id = subnet_data['Subnets'][0].get('VpcId')
+                        if vpc_id:
+                            discovered_vpc_ids.add(vpc_id)
+                        fetched_subnets.append(subnet_id)
+            else:
+                Colors.blue(f"Fetching subnet {subnet_id} from AWS...")
+                try:
+                    response = self.aws.describe_subnets(subnet_ids=[subnet_id])
+
+                    # Check if subnet was found
+                    if response.get('Subnets'):
+                        subnet = response['Subnets'][0]
+                        vpc_id = subnet.get('VpcId')
+                        if vpc_id:
+                            discovered_vpc_ids.add(vpc_id)
+
+                        # Save individual subnet file
+                        with open(subnet_file, 'w') as f:
+                            json.dump(response, f, indent=2, default=str)
+
+                        Colors.green(f"Saved subnet {subnet_id} to {subnet_file}")
+                        fetched_subnets.append(subnet_id)
+                    else:
+                        Colors.perr(f"Subnet {subnet_id} not found in AWS!")
+
+                except Exception as e:
+                    Colors.perr(f"Failed to fetch subnet {subnet_id}: {str(e)}")
+
+        # Report on subnet fetching
+        if len(fetched_subnets) == len(subnet_ids):
+            Colors.green(f"Successfully fetched all {len(subnet_ids)} subnets")
+        else:
+            Colors.yellow(f"Fetched {len(fetched_subnets)} of {len(subnet_ids)} subnets")
+            missing = set(subnet_ids) - set(fetched_subnets)
+            Colors.perr(f"Missing subnets: {', '.join(missing)}")
+
+        # Fetch VPC details for each discovered VPC
+        if discovered_vpc_ids:
+            Colors.blue(f"Discovered {len(discovered_vpc_ids)} VPC(s): {', '.join(discovered_vpc_ids)}")
+
+            for vpc_id in discovered_vpc_ids:
+                self._fetch_vpc_details(vpc_id)
+        else:
+            Colors.yellow("No VPCs discovered from subnets")
+
+    def _fetch_vpc_details(self, vpc_id: str):
+        """
+        Fetch and save VPC details including DNS attributes.
+
+        Args:
+            vpc_id: The VPC ID to fetch
+        """
+        vpc_file = f"{self.file_prefix}_{vpc_id}_VPC.json"
+
+        # Fetch main VPC details
+        if Path(vpc_file).exists():
+            Colors.green(f"Using existing VPC file: {vpc_file}")
+        else:
+            Colors.blue(f"Fetching VPC {vpc_id} from AWS...")
+            try:
+                response = self.aws.describe_vpcs(vpc_ids=[vpc_id])
+                with open(vpc_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+                Colors.green(f"Saved VPC {vpc_id} to {vpc_file}")
+            except Exception as e:
+                Colors.perr(f"Failed to fetch VPC {vpc_id}: {str(e)}")
+                return
+
+        # Fetch VPC DNS attributes
+        dns_host_file = f"{self.file_prefix}_{vpc_id}_VPC_attrDnsHost.json"
+        if Path(dns_host_file).exists():
+            Colors.green(f"Using existing DNS hostname attribute file: {dns_host_file}")
+        else:
+            Colors.blue(f"Fetching DNS hostname attribute for VPC {vpc_id}...")
+            try:
+                response = self.aws.describe_vpc_attribute(
+                    vpc_id=vpc_id,
+                    attribute='enableDnsHostnames'
+                )
+                with open(dns_host_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch DNS hostname attribute: {str(e)}")
+
+        dns_supp_file = f"{self.file_prefix}_{vpc_id}_VPC_attrDnsSupp.json"
+        if Path(dns_supp_file).exists():
+            Colors.green(f"Using existing DNS support attribute file: {dns_supp_file}")
+        else:
+            Colors.blue(f"Fetching DNS support attribute for VPC {vpc_id}...")
+            try:
+                response = self.aws.describe_vpc_attribute(
+                    vpc_id=vpc_id,
+                    attribute='enableDnsSupport'
+                )
+                with open(dns_supp_file, 'w') as f:
+                    json.dump(response, f, indent=2, default=str)
+            except Exception as e:
+                Colors.perr(f"Failed to fetch DNS support attribute: {str(e)}")
+
     def _get_network_infrastructure(self):
         """Fetch network infrastructure: subnets, route tables, gateways"""
         Colors.hdr("Getting network infrastructure")
@@ -1865,6 +2010,21 @@ class ClusterDataCollector:
                             'InstanceId': instance.get('InstanceId'),
                             'State': instance.get('State', {}).get('Name'),
                             'LaunchTime': instance.get('LaunchTime').isoformat() if instance.get('LaunchTime') else None,
+                            'PrivateIpAddress': instance.get('PrivateIpAddress'),
+                            'PublicIpAddress': instance.get('PublicIpAddress'),
+                            'PrivateDnsName': instance.get('PrivateDnsName'),
+                            'PublicDnsName': instance.get('PublicDnsName'),
+                            'SecurityGroups': instance.get('SecurityGroups', []),
+                            'VpcId': instance.get('VpcId'),
+                            'SubnetId': instance.get('SubnetId'),
+                            'Placement': instance.get('Placement', {}),
+                            'InstanceType': instance.get('InstanceType'),
+                            'IamInstanceProfile': instance.get('IamInstanceProfile'),
+                            'ImageId': instance.get('ImageId'),
+                            'Architecture': instance.get('Architecture'),
+                            'RootDeviceName': instance.get('RootDeviceName'),
+                            'RootDeviceType': instance.get('RootDeviceType'),
+                            'BlockDeviceMappings': instance.get('BlockDeviceMappings', []),
                             'Tags': instance.get('Tags', [])
                         })
 

@@ -96,10 +96,12 @@ def test_cluster_domain_configured(cluster_data: ClusterData):
     Failure indicates: The cluster domain is not configured in metadata, which would prevent
     proper DNS setup and could indicate incomplete installation configuration.
     """
-    domain = cluster_data.cluster_json.get('dns', {}).get('baseDomain', '')
+    # Try different possible locations for domain
+    dns_config = cluster_data.cluster_json.get('dns', {})
+    domain = dns_config.get('baseDomain') or dns_config.get('base_domain', '')
 
     if not domain:
-        # Try alternative location
+        # Try top-level alternative location
         domain = cluster_data.cluster_json.get('base_domain', '')
 
     assert domain, "Cluster domain not configured"
