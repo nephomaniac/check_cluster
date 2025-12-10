@@ -36,6 +36,7 @@ class Colors:
     RED = '\033[1;31m'
     BLUE = '\033[1;34m'
     GREEN = '\033[1;32m'
+    YELLOW = '\033[1;33m'
     RESET = '\033[0m'
 
     @staticmethod
@@ -52,6 +53,11 @@ class Colors:
     def green(msg: str):
         """Print green text"""
         print(f"{Colors.GREEN}{msg}{Colors.RESET}")
+
+    @staticmethod
+    def yellow(msg: str):
+        """Print yellow text"""
+        print(f"{Colors.YELLOW}{msg}{Colors.RESET}")
 
     @staticmethod
     def hdr(msg: str):
