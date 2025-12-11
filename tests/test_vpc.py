@@ -4,6 +4,7 @@ VPC Configuration Tests
 Validates VPC DNS settings, DHCP options, and network configuration for ROSA clusters.
 """
 
+import json
 import pytest
 from models.cluster import ClusterData
 
@@ -19,6 +20,12 @@ def test_vpc_exists(cluster_data: ClusterData):
     network infrastructure or data collection failed.
     """
     vpcs = cluster_data.vpcs
+
+    vpc_data = vpcs.get('Vpcs', [])
+    print(f"\n✓ Found {len(vpc_data)} VPC(s):")
+    vpc_summary = [{"VpcId": vpc.get("VpcId"), "CidrBlock": vpc.get("CidrBlock"), "State": vpc.get("State")} for vpc in vpc_data]
+    print(json.dumps(vpc_summary, indent=2))
+
     assert vpcs, "No VPC data found"
 
     vpc_data = vpcs.get('Vpcs', [])
@@ -39,11 +46,18 @@ def test_vpc_dns_hostnames_enabled(cluster_data: ClusterData):
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
+        print("\n✗ No VPC data available")
         pytest.skip("No VPC data available")
 
     vpc = vpcs[0]
     dns_hostnames = vpc.get('EnableDnsHostnames', False)
     vpc_id = vpc.get('VpcId', 'unknown')
+
+    print(f"\n✓ VPC DNS configuration:")
+    print(json.dumps({
+        "VpcId": vpc_id,
+        "EnableDnsHostnames": dns_hostnames
+    }, indent=2))
 
     assert dns_hostnames, f"VPC {vpc_id} does not have DNS hostnames enabled"
 
@@ -61,11 +75,18 @@ def test_vpc_dns_support_enabled(cluster_data: ClusterData):
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
+        print("\n✗ No VPC data available")
         pytest.skip("No VPC data available")
 
     vpc = vpcs[0]
     dns_support = vpc.get('EnableDnsSupport', False)
     vpc_id = vpc.get('VpcId', 'unknown')
+
+    print(f"\n✓ VPC DNS support:")
+    print(json.dumps({
+        "VpcId": vpc_id,
+        "EnableDnsSupport": dns_support
+    }, indent=2))
 
     assert dns_support, f"VPC {vpc_id} does not have DNS support enabled"
 
@@ -76,11 +97,18 @@ def test_vpc_cidr_block_configured(cluster_data: ClusterData):
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
+        print("\n✗ No VPC data available")
         pytest.skip("No VPC data available")
 
     vpc = vpcs[0]
     cidr_block = vpc.get('CidrBlock', '')
     vpc_id = vpc.get('VpcId', 'unknown')
+
+    print(f"\n✓ VPC CIDR block:")
+    print(json.dumps({
+        "VpcId": vpc_id,
+        "CidrBlock": cidr_block
+    }, indent=2))
 
     assert cidr_block, f"VPC {vpc_id} has no CIDR block configured"
     assert '/' in cidr_block, f"VPC {vpc_id} CIDR block is malformed: {cidr_block}"
@@ -92,11 +120,18 @@ def test_vpc_state_available(cluster_data: ClusterData):
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
+        print("\n✗ No VPC data available")
         pytest.skip("No VPC data available")
 
     vpc = vpcs[0]
     state = vpc.get('State', 'unknown')
     vpc_id = vpc.get('VpcId', 'unknown')
+
+    print(f"\n✓ VPC state:")
+    print(json.dumps({
+        "VpcId": vpc_id,
+        "State": state
+    }, indent=2))
 
     assert state == 'available', f"VPC {vpc_id} is not available (state: {state})"
 
@@ -107,10 +142,17 @@ def test_dhcp_options_associated(cluster_data: ClusterData):
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
+        print("\n✗ No VPC data available")
         pytest.skip("No VPC data available")
 
     vpc = vpcs[0]
     dhcp_options_id = vpc.get('DhcpOptionsId', '')
     vpc_id = vpc.get('VpcId', 'unknown')
+
+    print(f"\n✓ VPC DHCP options:")
+    print(json.dumps({
+        "VpcId": vpc_id,
+        "DhcpOptionsId": dhcp_options_id
+    }, indent=2))
 
     assert dhcp_options_id, f"VPC {vpc_id} has no DHCP options set associated"

@@ -31,6 +31,16 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
         subnets_data = json.load(f)
 
     subnets = subnets_data.get('Subnets', [])
+
+    print(f"\n✓ Found {len(subnets)} subnets:")
+    subnet_summary = [{
+        "SubnetId": s.get("SubnetId"),
+        "AvailabilityZone": s.get("AvailabilityZone"),
+        "CidrBlock": s.get("CidrBlock"),
+        "MapPublicIpOnLaunch": s.get("MapPublicIpOnLaunch", False)
+    } for s in subnets]
+    print(json.dumps(subnet_summary, indent=2))
+
     assert len(subnets) > 0, f"No subnets found for cluster {infra_id}"
 
 
@@ -58,6 +68,17 @@ def test_subnets_in_available_state(cluster_data: ClusterData, infra_id: str):
         if s.get('State') != 'available'
     ]
 
+    if len(unavailable_subnets) == 0:
+        print(f"\n✓ All {len(cluster_subnets)} subnets in available state:")
+        subnet_states = [{
+            "SubnetId": s.get("SubnetId"),
+            "State": s.get("State")
+        } for s in cluster_subnets]
+        print(json.dumps(subnet_states, indent=2))
+    else:
+        print(f"\n✗ Subnets not in available state:")
+        print(json.dumps(unavailable_subnets, indent=2))
+
     assert len(unavailable_subnets) == 0, \
         f"Subnets not in 'available' state: {unavailable_subnets}"
 
@@ -84,6 +105,22 @@ def test_public_and_private_subnets(cluster_data: ClusterData, infra_id: str):
     public_subnets = [s for s in cluster_subnets if s.get('MapPublicIpOnLaunch', False)]
     private_subnets = [s for s in cluster_subnets if not s.get('MapPublicIpOnLaunch', False)]
 
+    print(f"\n✓ Subnet configuration:")
+    print(json.dumps({
+        "PublicSubnets": [{
+            "SubnetId": s.get("SubnetId"),
+            "CidrBlock": s.get("CidrBlock"),
+            "AvailabilityZone": s.get("AvailabilityZone")
+        } for s in public_subnets],
+        "PrivateSubnets": [{
+            "SubnetId": s.get("SubnetId"),
+            "CidrBlock": s.get("CidrBlock"),
+            "AvailabilityZone": s.get("AvailabilityZone")
+        } for s in private_subnets],
+        "PublicCount": len(public_subnets),
+        "PrivateCount": len(private_subnets)
+    }, indent=2))
+
     assert len(public_subnets) > 0, f"No public subnets found (expected subnets with MapPublicIpOnLaunch=true)"
     assert len(private_subnets) > 0, f"No private subnets found (expected subnets with MapPublicIpOnLaunch=false)"
 
@@ -108,10 +145,22 @@ def test_subnet_kubernetes_role_tags(cluster_data: ClusterData, infra_id: str):
     )]
 
     issues = []
+    subnet_role_tags = []
+
     for subnet in cluster_subnets:
         subnet_id = subnet.get('SubnetId')
         tags = {tag['Key']: tag['Value'] for tag in subnet.get('Tags', [])}
         is_public = subnet.get('MapPublicIpOnLaunch', False)
+
+        expected_tag = 'kubernetes.io/role/elb' if is_public else 'kubernetes.io/role/internal-elb'
+        has_tag = expected_tag in tags
+
+        subnet_role_tags.append({
+            "SubnetId": subnet_id,
+            "IsPublic": is_public,
+            "ExpectedTag": expected_tag,
+            "HasTag": has_tag
+        })
 
         if is_public:
             if 'kubernetes.io/role/elb' not in tags:
@@ -119,6 +168,13 @@ def test_subnet_kubernetes_role_tags(cluster_data: ClusterData, infra_id: str):
         else:
             if 'kubernetes.io/role/internal-elb' not in tags:
                 issues.append(f"Private subnet {subnet_id} missing 'kubernetes.io/role/internal-elb' tag")
+
+    if len(issues) == 0:
+        print(f"\n✓ All subnets have correct Kubernetes role tags:")
+        print(json.dumps(subnet_role_tags, indent=2))
+    else:
+        print(f"\n✗ Subnet tagging issues:")
+        print(json.dumps([tag for tag in subnet_role_tags if not tag["HasTag"]], indent=2))
 
     assert len(issues) == 0, f"Subnet tagging issues: {'; '.join(issues)}"
 
@@ -144,6 +200,16 @@ def test_internet_gateway_exists(cluster_data: ClusterData, infra_id: str, is_pr
         tag.get('Key') == 'Name' and infra_id in tag.get('Value', '')
         for tag in igw.get('Tags', [])
     )]
+
+    if cluster_igws:
+        print(f"\n✓ Found {len(cluster_igws)} internet gateway(s):")
+        igw_summary = [{
+            "InternetGatewayId": igw.get("InternetGatewayId"),
+            "Attachments": igw.get("Attachments", [])
+        } for igw in cluster_igws]
+        print(json.dumps(igw_summary, indent=2))
+    else:
+        print(f"\n✗ No internet gateway found for cluster {infra_id}")
 
     assert len(cluster_igws) > 0, f"No internet gateway found for public cluster {infra_id}"
 
@@ -171,17 +237,38 @@ def test_internet_gateway_attached(cluster_data: ClusterData, infra_id: str, is_
     )]
 
     issues = []
+    igw_attachment_status = []
+
     for igw in cluster_igws:
         igw_id = igw.get('InternetGatewayId')
         attachments = igw.get('Attachments', [])
 
         if len(attachments) == 0:
             issues.append(f"IGW {igw_id} has no VPC attachments")
+            igw_attachment_status.append({
+                "InternetGatewayId": igw_id,
+                "AttachmentCount": 0,
+                "Status": "No attachments"
+            })
             continue
 
         for attachment in attachments:
-            if attachment.get('State') != 'available':
-                issues.append(f"IGW {igw_id} attachment state is '{attachment.get('State')}', expected 'available'")
+            state = attachment.get('State')
+            igw_attachment_status.append({
+                "InternetGatewayId": igw_id,
+                "VpcId": attachment.get('VpcId'),
+                "State": state
+            })
+
+            if state != 'available':
+                issues.append(f"IGW {igw_id} attachment state is '{state}', expected 'available'")
+
+    if len(issues) == 0:
+        print(f"\n✓ All internet gateways properly attached:")
+        print(json.dumps(igw_attachment_status, indent=2))
+    else:
+        print(f"\n✗ Internet gateway attachment issues:")
+        print(json.dumps(igw_attachment_status, indent=2))
 
     assert len(issues) == 0, f"Internet gateway issues: {'; '.join(issues)}"
 
@@ -204,6 +291,17 @@ def test_nat_gateway_exists(cluster_data: ClusterData, infra_id: str):
         tag.get('Key') == 'Name' and infra_id in tag.get('Value', '')
         for tag in nat.get('Tags', [])
     )]
+
+    if cluster_nat_gws:
+        print(f"\n✓ Found {len(cluster_nat_gws)} NAT gateway(s):")
+        nat_summary = [{
+            "NatGatewayId": nat.get("NatGatewayId"),
+            "SubnetId": nat.get("SubnetId"),
+            "State": nat.get("State")
+        } for nat in cluster_nat_gws]
+        print(json.dumps(nat_summary, indent=2))
+    else:
+        print(f"\n✗ No NAT gateway found for cluster {infra_id}")
 
     assert len(cluster_nat_gws) > 0, f"No NAT gateway found for cluster {infra_id}"
 
@@ -232,6 +330,18 @@ def test_nat_gateway_available(cluster_data: ClusterData, infra_id: str):
         if nat.get('State') != 'available'
     ]
 
+    if len(unavailable_nats) == 0:
+        print(f"\n✓ All {len(cluster_nat_gws)} NAT gateways in available state:")
+        nat_states = [{
+            "NatGatewayId": nat.get("NatGatewayId"),
+            "State": nat.get("State"),
+            "SubnetId": nat.get("SubnetId")
+        } for nat in cluster_nat_gws]
+        print(json.dumps(nat_states, indent=2))
+    else:
+        print(f"\n✗ NAT gateways not in available state:")
+        print(json.dumps(unavailable_nats, indent=2))
+
     assert len(unavailable_nats) == 0, \
         f"NAT gateways not in 'available' state: {unavailable_nats}"
 
@@ -256,18 +366,41 @@ def test_nat_gateway_has_public_ip(cluster_data: ClusterData, infra_id: str):
     )]
 
     issues = []
+    nat_ip_details = []
+
     for nat in cluster_nat_gws:
         nat_id = nat.get('NatGatewayId')
         addresses = nat.get('NatGatewayAddresses', [])
 
         if len(addresses) == 0:
             issues.append(f"NAT gateway {nat_id} has no addresses")
+            nat_ip_details.append({
+                "NatGatewayId": nat_id,
+                "AddressCount": 0,
+                "HasPublicIP": False
+            })
             continue
 
         # Check for public IP in addresses
-        has_public_ip = any(addr.get('PublicIp') for addr in addresses)
+        public_ips = [addr.get('PublicIp') for addr in addresses if addr.get('PublicIp')]
+        has_public_ip = len(public_ips) > 0
+
+        nat_ip_details.append({
+            "NatGatewayId": nat_id,
+            "PublicIPs": public_ips,
+            "PrivateIPs": [addr.get('PrivateIp') for addr in addresses if addr.get('PrivateIp')],
+            "HasPublicIP": has_public_ip
+        })
+
         if not has_public_ip:
             issues.append(f"NAT gateway {nat_id} has no public IP address")
+
+    if len(issues) == 0:
+        print(f"\n✓ All NAT gateways have public IP addresses:")
+        print(json.dumps(nat_ip_details, indent=2))
+    else:
+        print(f"\n✗ NAT gateway IP issues:")
+        print(json.dumps([detail for detail in nat_ip_details if not detail["HasPublicIP"]], indent=2))
 
     assert len(issues) == 0, f"NAT gateway IP issues: {'; '.join(issues)}"
 
@@ -291,6 +424,18 @@ def test_elastic_ips_for_nat(cluster_data: ClusterData, infra_id: str):
         for tag in addr.get('Tags', [])
     )]
 
+    if cluster_eips:
+        print(f"\n✓ Found {len(cluster_eips)} Elastic IPs for NAT gateways:")
+        eip_summary = [{
+            "AllocationId": addr.get("AllocationId"),
+            "PublicIp": addr.get("PublicIp"),
+            "AssociationId": addr.get("AssociationId"),
+            "NetworkInterfaceId": addr.get("NetworkInterfaceId")
+        } for addr in cluster_eips]
+        print(json.dumps(eip_summary, indent=2))
+    else:
+        print(f"\n✗ No Elastic IPs found for cluster {infra_id}")
+
     # Should have at least one EIP for NAT gateway
     assert len(cluster_eips) > 0, f"No Elastic IPs found for cluster {infra_id} NAT gateways"
 
@@ -313,6 +458,18 @@ def test_route_tables_exist(cluster_data: ClusterData, infra_id: str):
         tag.get('Key') == 'Name' and infra_id in tag.get('Value', '')
         for tag in rt.get('Tags', [])
     )]
+
+    if cluster_rts:
+        print(f"\n✓ Found {len(cluster_rts)} route tables:")
+        rt_summary = [{
+            "RouteTableId": rt.get("RouteTableId"),
+            "VpcId": rt.get("VpcId"),
+            "AssociationCount": len(rt.get("Associations", [])),
+            "RouteCount": len(rt.get("Routes", []))
+        } for rt in cluster_rts]
+        print(json.dumps(rt_summary, indent=2))
+    else:
+        print(f"\n✗ No route tables found for cluster {infra_id}")
 
     assert len(cluster_rts) > 0, f"No route tables found for cluster {infra_id}"
 
@@ -343,19 +500,34 @@ def test_public_route_to_internet_gateway(cluster_data: ClusterData, infra_id: s
         pytest.skip("No public route tables found")
 
     issues = []
+    public_rt_routes = []
+
     for rt in public_rts:
         rt_id = rt.get('RouteTableId')
         routes = rt.get('Routes', [])
 
         # Check for default route (0.0.0.0/0) to IGW
-        has_igw_route = any(
-            route.get('DestinationCidrBlock') == '0.0.0.0/0' and
-            route.get('GatewayId', '').startswith('igw-')
-            for route in routes
-        )
+        igw_routes = [r for r in routes if r.get('DestinationCidrBlock') == '0.0.0.0/0' and r.get('GatewayId', '').startswith('igw-')]
+        has_igw_route = len(igw_routes) > 0
+
+        public_rt_routes.append({
+            "RouteTableId": rt_id,
+            "HasIGWRoute": has_igw_route,
+            "Routes": [{
+                "Destination": r.get("DestinationCidrBlock"),
+                "Gateway": r.get("GatewayId", r.get("NatGatewayId", "local"))
+            } for r in routes]
+        })
 
         if not has_igw_route:
             issues.append(f"Public route table {rt_id} missing 0.0.0.0/0 route to internet gateway")
+
+    if len(issues) == 0:
+        print(f"\n✓ All public route tables have IGW routes:")
+        print(json.dumps(public_rt_routes, indent=2))
+    else:
+        print(f"\n✗ Public route table issues:")
+        print(json.dumps([rt for rt in public_rt_routes if not rt["HasIGWRoute"]], indent=2))
 
     assert len(issues) == 0, f"Public route table issues: {'; '.join(issues)}"
 
@@ -383,19 +555,34 @@ def test_private_route_to_nat_gateway(cluster_data: ClusterData, infra_id: str):
         pytest.skip("No private route tables found")
 
     issues = []
+    private_rt_routes = []
+
     for rt in private_rts:
         rt_id = rt.get('RouteTableId')
         routes = rt.get('Routes', [])
 
         # Check for default route (0.0.0.0/0) to NAT gateway
-        has_nat_route = any(
-            route.get('DestinationCidrBlock') == '0.0.0.0/0' and
-            route.get('NatGatewayId', '').startswith('nat-')
-            for route in routes
-        )
+        nat_routes = [r for r in routes if r.get('DestinationCidrBlock') == '0.0.0.0/0' and r.get('NatGatewayId', '').startswith('nat-')]
+        has_nat_route = len(nat_routes) > 0
+
+        private_rt_routes.append({
+            "RouteTableId": rt_id,
+            "HasNATRoute": has_nat_route,
+            "Routes": [{
+                "Destination": r.get("DestinationCidrBlock"),
+                "Target": r.get("NatGatewayId", r.get("GatewayId", "local"))
+            } for r in routes]
+        })
 
         if not has_nat_route:
             issues.append(f"Private route table {rt_id} missing 0.0.0.0/0 route to NAT gateway")
+
+    if len(issues) == 0:
+        print(f"\n✓ All private route tables have NAT gateway routes:")
+        print(json.dumps(private_rt_routes, indent=2))
+    else:
+        print(f"\n✗ Private route table issues:")
+        print(json.dumps([rt for rt in private_rt_routes if not rt["HasNATRoute"]], indent=2))
 
     assert len(issues) == 0, f"Private route table issues: {'; '.join(issues)}"
 

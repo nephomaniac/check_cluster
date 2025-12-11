@@ -5,6 +5,7 @@ Validates that AWS resources specified in cluster.json .aws section
 were successfully fetched from AWS and saved to files.
 """
 
+import json
 import pytest
 from pathlib import Path
 from models.cluster import ClusterData
@@ -38,10 +39,21 @@ def test_sts_configuration_exists(cluster_data: ClusterData, sts_config):
     is incomplete.
     """
     if not sts_config:
+        print("\n✗ No STS configuration in cluster.json")
         pytest.skip("No STS configuration in cluster.json")
 
     if not sts_config.get('enabled'):
+        print(f"\n✗ STS not enabled for this cluster")
+        print(json.dumps({"StsEnabled": False}, indent=2))
         pytest.skip("STS not enabled for this cluster")
+
+    print(f"\n✓ STS configuration found:")
+    print(json.dumps({
+        "StsEnabled": sts_config.get('enabled'),
+        "InstallerRoleArn": sts_config.get('role_arn'),
+        "OidcEndpointUrl": sts_config.get('oidc_endpoint_url'),
+        "SupportRoleArn": sts_config.get('support_role_arn')
+    }, indent=2))
 
     assert sts_config.get('enabled') is True, "STS should be enabled"
     assert sts_config.get('role_arn'), "Installer role ARN should be present"
@@ -71,6 +83,21 @@ def test_installer_role_fetched(cluster_data: ClusterData, sts_config):
     # Check for role file
     role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}.json"
 
+    if role_file.exists():
+        print(f"\n✓ Installer role found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "RoleFile": role_file.name
+        }, indent=2))
+    else:
+        print(f"\n✗ Installer role file not found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "ExpectedFile": role_file.name
+        }, indent=2))
+
     assert role_file.exists(), \
         f"Installer role file not found: {role_file.name}. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
@@ -94,6 +121,21 @@ def test_support_role_fetched(cluster_data: ClusterData, sts_config):
 
     role_name = role_arn.split('/')[-1]
     role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_support_{role_name}.json"
+
+    if role_file.exists():
+        print(f"\n✓ Support role found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "RoleFile": role_file.name
+        }, indent=2))
+    else:
+        print(f"\n✗ Support role file not found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "ExpectedFile": role_file.name
+        }, indent=2))
 
     assert role_file.exists(), \
         f"Support role file not found: {role_file.name}. " \
@@ -121,6 +163,21 @@ def test_master_instance_role_fetched(cluster_data: ClusterData, sts_config):
     role_name = role_arn.split('/')[-1]
     role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_master_{role_name}.json"
 
+    if role_file.exists():
+        print(f"\n✓ Master instance role found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "RoleFile": role_file.name
+        }, indent=2))
+    else:
+        print(f"\n✗ Master instance role file not found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "ExpectedFile": role_file.name
+        }, indent=2))
+
     assert role_file.exists(), \
         f"Master instance role file not found: {role_file.name}. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
@@ -147,6 +204,21 @@ def test_worker_instance_role_fetched(cluster_data: ClusterData, sts_config):
     role_name = role_arn.split('/')[-1]
     role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_worker_{role_name}.json"
 
+    if role_file.exists():
+        print(f"\n✓ Worker instance role found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "RoleFile": role_file.name
+        }, indent=2))
+    else:
+        print(f"\n✗ Worker instance role file not found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "ExpectedFile": role_file.name
+        }, indent=2))
+
     assert role_file.exists(), \
         f"Worker instance role file not found: {role_file.name}. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
@@ -171,6 +243,7 @@ def test_all_operator_roles_fetched(cluster_data: ClusterData, sts_config):
         pytest.skip("No operator roles in cluster.json")
 
     missing_roles = []
+    found_roles = []
 
     for op_role in operator_roles:
         role_arn = op_role.get('role_arn')
@@ -184,8 +257,22 @@ def test_all_operator_roles_fetched(cluster_data: ClusterData, sts_config):
         safe_role_type = f"operator-{namespace}-{name}".replace('/', '-').replace(':', '-')
         role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_{safe_role_type}_{role_name}.json"
 
-        if not role_file.exists():
+        if role_file.exists():
+            found_roles.append({
+                "Operator": f"{namespace}/{name}",
+                "RoleName": role_name,
+                "RoleArn": role_arn
+            })
+        else:
             missing_roles.append(f"{namespace}/{name} ({role_name})")
+
+    if found_roles:
+        print(f"\n✓ Found {len(found_roles)} operator roles:")
+        print(json.dumps(found_roles, indent=2))
+
+    if missing_roles:
+        print(f"\n✗ Missing {len(missing_roles)} operator roles:")
+        print(json.dumps(missing_roles, indent=2))
 
     assert not missing_roles, \
         f"Operator role files not found for: {', '.join(missing_roles)}. " \
@@ -214,6 +301,29 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData, sts_config):
 
         # At least one policy file should exist (inline or attached)
         has_policies = policies_file.exists() or attached_file.exists()
+
+        policy_files = []
+        if policies_file.exists():
+            policy_files.append({"Type": "Inline", "File": policies_file.name})
+        if attached_file.exists():
+            policy_files.append({"Type": "Attached", "File": attached_file.name})
+
+        if has_policies:
+            print(f"\n✓ Installer role policies found:")
+            print(json.dumps({
+                "RoleName": role_name,
+                "PolicyFiles": policy_files
+            }, indent=2))
+        else:
+            print(f"\n✗ No policy files found:")
+            print(json.dumps({
+                "RoleName": role_name,
+                "ExpectedFiles": [
+                    policies_file.name,
+                    attached_file.name
+                ]
+            }, indent=2))
+
         assert has_policies, \
             f"No policy files found for installer role {role_name}. " \
             f"Run get_install_artifacts.py to fetch IAM resources."
@@ -239,16 +349,32 @@ def test_oidc_provider_fetched(cluster_data: ClusterData, sts_config):
     # OIDC provider files should exist
     oidc_list_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_oidc_providers_list.json"
 
-    assert oidc_list_file.exists(), \
-        f"OIDC providers list file not found: {oidc_list_file.name}. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
-
     # Check for specific OIDC provider file (filename contains sanitized ARN)
     # We'll look for any file matching the pattern
     oidc_files = list(cluster_data.data_dir.glob(f"{cluster_data.cluster_id}_oidc_provider_*.json"))
 
     # Exclude the list file
     oidc_files = [f for f in oidc_files if not f.name.endswith('_oidc_providers_list.json')]
+
+    if oidc_list_file.exists() and oidc_files:
+        print(f"\n✓ OIDC provider found:")
+        print(json.dumps({
+            "OidcEndpointUrl": oidc_url,
+            "ListFile": oidc_list_file.name,
+            "ProviderFiles": [f.name for f in oidc_files]
+        }, indent=2))
+    else:
+        print(f"\n✗ OIDC provider files not found:")
+        print(json.dumps({
+            "OidcEndpointUrl": oidc_url,
+            "ListFileExists": oidc_list_file.exists(),
+            "ProviderFilesFound": len(oidc_files),
+            "ExpectedListFile": oidc_list_file.name
+        }, indent=2))
+
+    assert oidc_list_file.exists(), \
+        f"OIDC providers list file not found: {oidc_list_file.name}. " \
+        f"Run get_install_artifacts.py to fetch IAM resources."
 
     assert oidc_files, \
         f"No OIDC provider detail files found. " \
@@ -277,7 +403,6 @@ def test_iam_role_files_contain_valid_data(cluster_data: ClusterData, sts_config
     if not role_file.exists():
         pytest.skip(f"Role file not found: {role_file.name}")
 
-    import json
     with open(role_file) as f:
         role_data = json.load(f)
 
@@ -285,6 +410,16 @@ def test_iam_role_files_contain_valid_data(cluster_data: ClusterData, sts_config
     assert 'Role' in role_data, "IAM role response should contain 'Role' key"
 
     role = role_data['Role']
+
+    print(f"\n✓ IAM role data validated:")
+    print(json.dumps({
+        "RoleName": role.get('RoleName'),
+        "Arn": role.get('Arn'),
+        "HasAssumeRolePolicy": 'AssumeRolePolicyDocument' in role,
+        "CreateDate": role.get('CreateDate'),
+        "RoleFile": role_file.name
+    }, indent=2, default=str))
+
     assert role.get('RoleName') == role_name, \
         f"Role name mismatch: expected {role_name}, got {role.get('RoleName')}"
     assert role.get('Arn') == role_arn, \
@@ -313,6 +448,21 @@ def test_audit_log_role_fetched_if_configured(cluster_data: ClusterData, aws_con
 
     role_name = role_arn.split('/')[-1]
     role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_audit-log_{role_name}.json"
+
+    if role_file.exists():
+        print(f"\n✓ Audit log role found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "RoleFile": role_file.name
+        }, indent=2))
+    else:
+        print(f"\n✗ Audit log role file not found:")
+        print(json.dumps({
+            "RoleName": role_name,
+            "RoleArn": role_arn,
+            "ExpectedFile": role_file.name
+        }, indent=2))
 
     assert role_file.exists(), \
         f"Audit log role file not found: {role_file.name}. " \

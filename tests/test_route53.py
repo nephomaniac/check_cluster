@@ -4,6 +4,7 @@ Route53 DNS Tests
 Validates Route53 hosted zones and DNS records for ROSA cluster.
 """
 
+import json
 import pytest
 from models.cluster import ClusterData
 
@@ -24,6 +25,19 @@ def test_hosted_zone_exists(cluster_data: ClusterData):
         pytest.skip("No Route53 data available")
 
     hosted_zones = zones.get('HostedZones', [])
+
+    if hosted_zones:
+        print(f"\n✓ Found {len(hosted_zones)} hosted zone(s):")
+        zone_summary = [{
+            "HostedZoneId": zone.get("Id"),
+            "Name": zone.get("Name"),
+            "ResourceRecordSetCount": zone.get("ResourceRecordSetCount"),
+            "PrivateZone": zone.get("Config", {}).get("PrivateZone", False)
+        } for zone in hosted_zones]
+        print(json.dumps(zone_summary, indent=2))
+    else:
+        print("\n✗ No hosted zones found")
+
     assert hosted_zones, "No hosted zones found"
 
 
@@ -43,6 +57,14 @@ def test_hosted_zone_private(cluster_data: ClusterData, is_private_cluster: bool
     zone_id = zone.get('Id', 'unknown')
     is_private = zone.get('Config', {}).get('PrivateZone', False)
 
+    print(f"\n✓ Hosted zone privacy configuration:")
+    print(json.dumps({
+        "HostedZoneId": zone_id,
+        "IsPrivate": is_private,
+        "ClusterType": "private" if is_private_cluster else "public",
+        "Expected": "private" if is_private_cluster else "public or private"
+    }, indent=2))
+
     if is_private_cluster:
         assert is_private, f"Private cluster should have private hosted zone {zone_id}"
 
@@ -60,6 +82,12 @@ def test_api_dns_record_exists(cluster_data: ClusterData):
 
     if not api_url:
         pytest.skip("API URL not found in cluster data")
+
+    print(f"\n✓ API DNS record:")
+    print(json.dumps({
+        "ApiUrl": api_url,
+        "HasApiPrefix": 'api' in api_url.lower()
+    }, indent=2))
 
     # API URL should contain the cluster domain
     assert 'api' in api_url.lower(), f"API URL does not contain 'api': {api_url}"
@@ -103,6 +131,15 @@ def test_cluster_domain_configured(cluster_data: ClusterData):
     if not domain:
         # Try top-level alternative location
         domain = cluster_data.cluster_json.get('base_domain', '')
+
+    if domain:
+        print(f"\n✓ Cluster domain configured:")
+        print(json.dumps({
+            "BaseDomain": domain,
+            "IsValid": '.' in domain
+        }, indent=2))
+    else:
+        print("\n✗ Cluster domain not configured")
 
     assert domain, "Cluster domain not configured"
     assert '.' in domain, f"Cluster domain appears invalid: {domain}"

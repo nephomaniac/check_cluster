@@ -4,6 +4,7 @@ Installation Status Tests
 Validates ROSA cluster installation status and configuration.
 """
 
+import json
 import pytest
 from models.cluster import ClusterData
 
@@ -18,7 +19,12 @@ def test_cluster_has_id(cluster_data: ClusterData):
     Failure indicates: Critical cluster metadata is missing from the configuration,
     suggesting incomplete installation or corrupted cluster data.
     """
-    assert cluster_data.cluster_id, "Cluster ID not found"
+    cluster_id = cluster_data.cluster_id
+
+    print(f"\n✓ Cluster ID found:")
+    print(json.dumps({"ClusterId": cluster_id}, indent=2))
+
+    assert cluster_id, "Cluster ID not found"
 
 
 @pytest.mark.installation
@@ -32,6 +38,10 @@ def test_cluster_has_infra_id(cluster_data: ClusterData):
     resource identification and potentially causing resource management failures.
     """
     infra_id = cluster_data.infra_id
+
+    print(f"\n✓ Infrastructure ID found:")
+    print(json.dumps({"InfraId": infra_id}, indent=2))
+
     assert infra_id, "Infrastructure ID not found"
 
 
@@ -48,9 +58,17 @@ def test_cluster_state(cluster_data: ClusterData):
     state = cluster_data.cluster_json.get('state', '').lower()
 
     if not state:
+        print("\n✗ Cluster state not available")
         pytest.skip("Cluster state not available")
 
     valid_states = ['ready', 'installed', 'active']
+
+    print(f"\n✓ Cluster state found:")
+    print(json.dumps({
+        "State": state,
+        "ValidStates": valid_states,
+        "IsValid": state in valid_states
+    }, indent=2))
 
     if state not in valid_states:
         pytest.fail(f"Cluster state is '{state}', expected one of {valid_states}")
@@ -71,6 +89,9 @@ def test_cluster_version(cluster_data: ClusterData):
     if not version:
         version = cluster_data.cluster_json.get('version', {}).get('raw_id', '')
 
+    print(f"\n✓ OpenShift version found:")
+    print(json.dumps({"Version": version}, indent=2))
+
     assert version, "OpenShift version not found"
     assert version.startswith('4.'), f"Unexpected OpenShift version format: {version}"
 
@@ -90,6 +111,9 @@ def test_cluster_region(cluster_data: ClusterData):
     if not region:
         region = cluster_data.cluster_json.get('aws', {}).get('region', '')
 
+    print(f"\n✓ AWS region found:")
+    print(json.dumps({"Region": region}, indent=2))
+
     assert region, "AWS region not configured"
     assert region.startswith('us-') or region.startswith('eu-') or region.startswith('ap-'), \
         f"Unexpected AWS region format: {region}"
@@ -107,6 +131,9 @@ def test_cluster_api_url(cluster_data: ClusterData):
     """
     api_url = cluster_data.cluster_json.get('api', {}).get('url', '')
 
+    print(f"\n✓ API URL found:")
+    print(json.dumps({"ApiUrl": api_url}, indent=2))
+
     assert api_url, "API URL not configured"
     assert api_url.startswith('https://'), f"API URL should use HTTPS: {api_url}"
 
@@ -117,7 +144,11 @@ def test_cluster_console_url(cluster_data: ClusterData):
     console_url = cluster_data.cluster_json.get('console', {}).get('url', '')
 
     if not console_url:
+        print("\n✗ Console URL not available")
         pytest.skip("Console URL not available")
+
+    print(f"\n✓ Console URL found:")
+    print(json.dumps({"ConsoleUrl": console_url}, indent=2))
 
     assert console_url.startswith('https://'), f"Console URL should use HTTPS: {console_url}"
 
@@ -135,12 +166,16 @@ def test_cluster_has_nodes(cluster_data: ClusterData):
     nodes = cluster_data.cluster_json.get('nodes', {})
 
     if not nodes:
+        print("\n✗ Node information not available")
         pytest.skip("Node information not available")
 
     # Check for compute nodes
     compute = nodes.get('compute', 0)
     if isinstance(compute, list) and compute:
         compute = compute[0].get('replicas', 0)
+
+    print(f"\n✓ Compute nodes configured:")
+    print(json.dumps({"ComputeNodes": compute}, indent=2))
 
     assert compute > 0, f"No compute nodes configured (compute: {compute})"
 
@@ -158,11 +193,18 @@ def test_cluster_network_configured(cluster_data: ClusterData):
     network = cluster_data.cluster_json.get('network', {})
 
     if not network:
+        print("\n✗ Network configuration not available")
         pytest.skip("Network configuration not available")
 
     # Check for pod CIDR
     pod_cidr = network.get('pod_cidr', '') or network.get('clusterNetwork', [{}])[0].get('cidr', '')
     service_cidr = network.get('service_cidr', '') or network.get('serviceNetwork', [''])[0]
+
+    print(f"\n✓ Network configuration found:")
+    print(json.dumps({
+        "PodCIDR": pod_cidr,
+        "ServiceCIDR": service_cidr
+    }, indent=2))
 
     assert pod_cidr, "Pod CIDR not configured"
     assert service_cidr, "Service CIDR not configured"
@@ -176,15 +218,24 @@ def test_cluster_multi_az(cluster_data: ClusterData):
 
     nodes = cluster_data.cluster_json.get('nodes', {})
     if not nodes:
+        print("\n✗ Node information not available")
         pytest.skip("Node information not available")
 
     availability_zones = nodes.get('availability_zones', [])
 
     # If no AZ info available, cannot validate
     if not availability_zones:
+        print("\n✗ Availability zone information not available")
         pytest.skip("Availability zone information not available")
 
     az_count = len(availability_zones)
+
+    print(f"\n✓ Multi-AZ configuration:")
+    print(json.dumps({
+        "MultiAZ": is_multi_az,
+        "AvailabilityZones": availability_zones,
+        "AZCount": az_count
+    }, indent=2))
 
     # Only validate configuration consistency, not make recommendations
     if is_multi_az:
@@ -214,6 +265,7 @@ def test_cluster_subscription_type(cluster_data: ClusterData):
     subscription = cluster_data.cluster_json.get('subscription', {})
 
     if not subscription:
+        print("\n✗ Subscription information not available")
         pytest.skip("Subscription information not available")
 
     sub_type = subscription.get('type', '')
@@ -221,9 +273,15 @@ def test_cluster_subscription_type(cluster_data: ClusterData):
     if not sub_type:
         # Subscription may be a link (SubscriptionLink) without full details
         if subscription.get('kind') == 'SubscriptionLink':
+            print("\n✓ Subscription found (link only):")
+            print(json.dumps({"Kind": "SubscriptionLink"}, indent=2))
             pytest.skip("Subscription details not expanded (SubscriptionLink only)")
         else:
+            print("\n✗ Subscription type not found")
             pytest.fail("Subscription type not found")
+
+    print(f"\n✓ Subscription found:")
+    print(json.dumps({"SubscriptionType": sub_type}, indent=2))
 
     # If we have a type, verify it's not empty
     assert sub_type, "Subscription type is empty"

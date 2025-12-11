@@ -5,6 +5,7 @@ Validates that security groups allow necessary traffic flows for ROSA clusters.
 Each test validates a specific traffic flow expectation.
 """
 
+import json
 import pytest
 from models.cluster import ClusterData
 
@@ -87,14 +88,16 @@ def _is_private_cidr(cidr: str) -> bool:
 
 def find_rule_for_traffic(sgs: dict, sg_names: list[str], protocol: str,
                           from_port: int, to_port: int, direction: str,
-                          source_type: str = "any") -> tuple[bool, str]:
+                          source_type: str = "any") -> tuple[bool, str, list[dict]]:
     """
     Search security groups for a rule that allows specific traffic.
 
     Returns:
-        Tuple of (found, details) where details describes matching rules
+        Tuple of (found, details, matching_rule_objects) where details describes matching rules
+        and matching_rule_objects contains the actual rule dicts that matched
     """
     matching_rules = []
+    matching_objects = []
 
     for sg_name in sg_names:
         if sg_name not in sgs:
@@ -111,11 +114,16 @@ def find_rule_for_traffic(sgs: dict, sg_names: list[str], protocol: str,
                                                    direction, source_type)
             if matches:
                 matching_rules.append(f"{sg_name}({sg_id}): {details}")
+                matching_objects.append({
+                    "security_group_name": sg_name,
+                    "security_group_id": sg_id,
+                    "rule": rule
+                })
 
     if matching_rules:
-        return True, "; ".join(matching_rules)
+        return True, "; ".join(matching_rules), matching_objects
     else:
-        return False, "No matching rules found"
+        return False, "No matching rules found", []
 
 
 # ============================================================================
@@ -138,9 +146,26 @@ def test_api_server_access(cluster_data: ClusterData, is_private_cluster: bool):
     api_lb_sgs = [f"{infra_id}-lb", f"{infra_id}-apiserver-lb"]
     source_type = "vpc" if is_private_cluster else "public"
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, api_lb_sgs, "tcp", 6443, 6443, "ingress", source_type
     )
+
+    if found:
+        print(f"\n✓ Found matching security group rules for Kubernetes API Server (tcp/6443 ingress from {source_type}):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected security group rule for Kubernetes API Server:")
+        print(json.dumps({
+            "expected": {
+                "security_groups": api_lb_sgs,
+                "rule_type": "ingress",
+                "protocol": "tcp",
+                "port": 6443,
+                "source_type": source_type,
+                "description": "Must allow tcp/6443 from " + ("VPC CIDR" if source_type == "vpc" else "0.0.0.0/0 (public)")
+            },
+            "actual": f"No matching rules found in security groups: {list(sgs.keys())}"
+        }, indent=2))
 
     assert found, f"Kubernetes API Server (tcp/6443 ingress from {source_type}): {details}"
 
@@ -165,9 +190,26 @@ def test_machine_config_server_access(cluster_data: ClusterData, is_private_clus
     # MCS should always be accessible via security groups, not public
     source_type = "sg"
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, api_lb_sgs, "tcp", 22623, 22623, "ingress", source_type
     )
+
+    if found:
+        print(f"\n✓ Found matching security group rules for Machine Config Server (tcp/22623 ingress from security groups):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected security group rule for Machine Config Server:")
+        print(json.dumps({
+            "expected": {
+                "security_groups": api_lb_sgs,
+                "rule_type": "ingress",
+                "protocol": "tcp",
+                "port": 22623,
+                "source_type": "security groups (sg-*)",
+                "description": "Must allow tcp/22623 from cluster node security groups"
+            },
+            "actual": f"No matching rules found in security groups: {list(sgs.keys())}"
+        }, indent=2))
 
     assert found, f"Machine Config Server (tcp/22623 ingress from security groups): {details}"
 
@@ -180,9 +222,15 @@ def test_control_plane_api_access(cluster_data: ClusterData):
 
     cp_sg = [f"{infra_id}-controlplane"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, cp_sg, "tcp", 6443, 6443, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Control plane API access (tcp/6443 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Control plane security group must allow tcp/6443 ingress from security groups")
 
     assert found, f"Control plane API access (tcp/6443 ingress): {details}"
 
@@ -195,9 +243,15 @@ def test_control_plane_mcs_access(cluster_data: ClusterData):
 
     cp_sg = [f"{infra_id}-controlplane"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, cp_sg, "tcp", 22623, 22623, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Control plane MCS access (tcp/22623 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Control plane security group must allow tcp/22623 ingress from security groups")
 
     assert found, f"Control plane MCS access (tcp/22623 ingress): {details}"
 
@@ -214,9 +268,15 @@ def test_worker_ssh_access(cluster_data: ClusterData):
 
     worker_sg = [f"{infra_id}-node"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, worker_sg, "tcp", 22, 22, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Worker SSH access (tcp/22 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Worker node security group must allow tcp/22 ingress from security groups")
 
     assert found, f"Worker SSH access (tcp/22 ingress): {details}"
 
@@ -236,9 +296,15 @@ def test_worker_kubelet_access(cluster_data: ClusterData):
 
     worker_sg = [f"{infra_id}-node"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, worker_sg, "tcp", 10250, 10250, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Worker kubelet access (tcp/10250 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Worker node security group must allow tcp/10250 ingress from control plane security group")
 
     assert found, f"Worker kubelet access (tcp/10250 ingress): {details}"
 
@@ -251,9 +317,15 @@ def test_worker_nodeport_access(cluster_data: ClusterData):
 
     worker_sg = [f"{infra_id}-node"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, worker_sg, "tcp", 30000, 32767, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Worker NodePort services (tcp/30000-32767 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Worker node security group must allow tcp/30000-32767 ingress from security groups")
 
     assert found, f"Worker NodePort services (tcp/30000-32767 ingress): {details}"
 
@@ -273,9 +345,15 @@ def test_worker_vxlan_overlay(cluster_data: ClusterData):
 
     worker_sg = [f"{infra_id}-node"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, worker_sg, "udp", 4789, 4789, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Worker VXLAN overlay (udp/4789 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Worker node security group must allow udp/4789 ingress for VXLAN overlay networking")
 
     assert found, f"Worker VXLAN overlay (udp/4789 ingress): {details}"
 
@@ -295,9 +373,15 @@ def test_worker_geneve_overlay(cluster_data: ClusterData):
 
     worker_sg = [f"{infra_id}-node"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, worker_sg, "udp", 6081, 6081, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Worker Geneve overlay (udp/6081 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Worker node security group must allow udp/6081 ingress for Geneve (OVN) overlay networking")
 
     assert found, f"Worker Geneve overlay (udp/6081 ingress): {details}"
 
@@ -310,9 +394,15 @@ def test_worker_internal_communication(cluster_data: ClusterData):
 
     worker_sg = [f"{infra_id}-node"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, worker_sg, "tcp", 9000, 9999, "ingress", "sg"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for Worker internal communication (tcp/9000-9999 ingress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: Worker node security group must allow tcp/9000-9999 ingress for internal cluster communication")
 
     assert found, f"Worker internal communication (tcp/9000-9999 ingress): {details}"
 
@@ -335,9 +425,15 @@ def test_all_egress_allowed(cluster_data: ClusterData):
 
     all_sg_names = list(sgs.keys())
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, all_sg_names, "-1", 0, 65535, "egress", "any"
     )
+
+    if found:
+        print(f"\n✓ Found matching rules for outbound traffic (all protocols egress):")
+        print(json.dumps(matching_objects, indent=2))
+    else:
+        print(f"\n✗ Expected: All security groups must allow unrestricted egress traffic")
 
     assert found, f"Outbound traffic (all protocols egress): {details}"
 
@@ -354,7 +450,7 @@ def test_etcd_client_port(cluster_data: ClusterData):
 
     cp_sg = [f"{infra_id}-controlplane"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, cp_sg, "tcp", 2379, 2379, "ingress", "sg"
     )
 
@@ -371,7 +467,7 @@ def test_etcd_peer_port(cluster_data: ClusterData):
 
     cp_sg = [f"{infra_id}-controlplane"]
 
-    found, details = find_rule_for_traffic(
+    found, details, matching_objects = find_rule_for_traffic(
         sgs, cp_sg, "tcp", 2380, 2380, "ingress", "sg"
     )
 
