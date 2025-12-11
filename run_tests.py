@@ -7,8 +7,11 @@ Main entry point for running cluster health checks and generating reports.
 
 import sys
 import argparse
+import json
 from pathlib import Path
 import subprocess
+import time
+import traceback
 from reporters.html_generator import HTMLReportGenerator
 
 
@@ -26,12 +29,14 @@ def run_pytest(cluster_dir: Path, json_output: Path, html_output: Path, verbose:
         Exit code from pytest
     """
     cmd = [
-        'pytest',
+        'uv', 'run', 'pytest',
         'tests/',
         f'--cluster-dir={cluster_dir}',
         f'--json-report',
         f'--json-report-file={json_output}',
         '--json-report-indent=2',
+        f'--html={html_output}',
+        '--self-contained-html',
     ]
 
     if verbose:
@@ -73,14 +78,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run tests for a cluster and generate reports
+  # Run tests for a cluster (HTML report saved in cluster directory with timestamp)
   %(prog)s --cluster-dir broken
 
   # Run tests with verbose output
   %(prog)s --cluster-dir new_good --verbose
 
-  # Specify custom output paths
-  %(prog)s --cluster-dir broken --html-output custom_report.html
+  # Specify custom HTML output path
+  %(prog)s --cluster-dir broken --html-output /path/to/custom_report.html
         """
     )
 
@@ -101,8 +106,8 @@ Examples:
     parser.add_argument(
         '--html-output',
         type=Path,
-        default=Path('test_report.html'),
-        help='Path for HTML report (default: test_report.html)'
+        default=None,
+        help='Path for HTML report (default: <cluster-dir>/test_report_<timestamp>.html)'
     )
 
     parser.add_argument(
@@ -134,27 +139,50 @@ Examples:
         print(f"Error: Not a directory: {args.cluster_dir}", file=sys.stderr)
         return 1
 
+    # Generate timestamped HTML output path if not provided
+    if args.html_output is None:
+        timestamp = int(time.time())
+        args.html_output = args.cluster_dir / f"test_report_{timestamp}.html"
+
     # Run tests
     exit_code = 0
     if not args.report_only:
-        exit_code = run_pytest(
-            args.cluster_dir,
-            args.json_output,
-            args.html_output,
-            args.verbose
-        )
+        try:
+            exit_code = run_pytest(
+                args.cluster_dir,
+                args.json_output,
+                args.html_output,
+                args.verbose
+            )
+        except Exception as e:
+            print(f"\n❌ Error: Unexpected exception during test execution", file=sys.stderr)
+            print(f"   {type(e).__name__}: {e}", file=sys.stderr)
+            print(f"\n   Stack trace:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return 1
 
-    # Generate HTML report
+    # Generate custom HTML report using HTMLReportGenerator
+    # NOTE: This will overwrite the pytest-html report, so you'll lose the JSON output column
     if not args.tests_only:
         if not args.json_output.exists():
-            print(f"Error: JSON report not found: {args.json_output}", file=sys.stderr)
-            print("Run tests first or check --json-output path", file=sys.stderr)
+            print(f"\n❌ Error: JSON report not found: {args.json_output}", file=sys.stderr)
+            print("   Run tests first or check --json-output path", file=sys.stderr)
             return 1
 
         try:
             generate_html_report(args.json_output, args.cluster_dir, args.html_output)
+        except json.JSONDecodeError:
+            # JSONDecodeError is already handled in HTMLReportGenerator with detailed output
+            # Just re-raise to exit with error code
+            return 1
+        except FileNotFoundError as e:
+            print(f"\n❌ Error: {e}", file=sys.stderr)
+            return 1
         except Exception as e:
-            print(f"Error generating HTML report: {e}", file=sys.stderr)
+            print(f"\n❌ Error: Unexpected exception generating HTML report", file=sys.stderr)
+            print(f"   {type(e).__name__}: {e}", file=sys.stderr)
+            print(f"\n   Stack trace:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return 1
 
     return exit_code

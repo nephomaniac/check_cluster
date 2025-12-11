@@ -1071,9 +1071,9 @@ class AWSCollector:
 class ClusterDataCollector:
     """Main collector class for ROSA cluster artifacts"""
 
-    def __init__(self, cluster_id: str, work_dir: str = ".", start_date: str = None,
-                 elapsed_time: str = None, period: int = 300, force_update: bool = False,
-                 debug: bool = False):
+    def __init__(self, cluster_id: str, work_dir: str = ".", region: str = None,
+                 start_date: str = None, elapsed_time: str = None, period: int = 300,
+                 force_update: bool = False, debug: bool = False):
         self.cluster_id = cluster_id
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(exist_ok=True)
@@ -1083,12 +1083,14 @@ class ClusterDataCollector:
         self.period = period
         self.force_update = force_update
         self.debug = debug
+        self.region_override = region  # CLI-provided region
 
         self.file_prefix = self.work_dir / cluster_id
         self.last_run_file = self.work_dir / "last_run.json"
 
-        # Initialize AWS collector
-        self.aws = AWSCollector(debug=debug)
+        # AWS collector will be initialized after cluster data is fetched
+        # (to use cluster region if not provided via CLI)
+        self.aws = None
 
         # Runtime variables
         self.capture_start = None
@@ -1098,17 +1100,97 @@ class ClusterDataCollector:
         self.domain_prefix = None
         self.private_link = False
         self.cluster_state = None
+        self.region = None  # Will be set from cluster.json or CLI
+
+        # Track failed requests with empty results
+        self.failed_empty_requests = []
+
+    def _is_empty_resource_file(self, file_path: Path, resource_keys: List[str]) -> bool:
+        """
+        Check if a file contains empty resource lists or is corrupted.
+
+        Args:
+            file_path: Path to the JSON file to check
+            resource_keys: List of possible keys that might contain the resource list
+                          (e.g., ['Instances'], ['Vpcs'], ['SecurityGroups'])
+
+        Returns:
+            True if file contains empty resource list or is corrupted/unparseable, False otherwise
+        """
+        if not file_path.exists():
+            return False
+
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+
+            # Check if it's a direct list (some files store just the list)
+            if isinstance(data, list) and len(data) == 0:
+                return True
+
+            # Check each possible resource key
+            for key in resource_keys:
+                if key in data:
+                    resource_list = data[key]
+                    # Check if it's an empty list
+                    if isinstance(resource_list, list) and len(resource_list) == 0:
+                        return True
+                    # For EC2 Reservations, check nested Instances
+                    if key == 'Reservations' and isinstance(resource_list, list):
+                        all_empty = all(len(r.get('Instances', [])) == 0 for r in resource_list)
+                        if all_empty:
+                            return True
+
+            return False
+
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            # Treat corrupted/unparseable files as empty to trigger re-fetch
+            Colors.yellow(f"Warning: Corrupted or unparseable file detected: {file_path}")
+            if self.debug:
+                Colors.yellow(f"  Parse error: {str(e)}")
+            Colors.yellow(f"  File will be re-fetched from AWS")
+            return True
+
+    def _log_empty_request_failure(self, resource_type: str, file_path: str, details: str = ""):
+        """
+        Log a failed request that returned empty resources.
+
+        Args:
+            resource_type: Type of resource (e.g., "EC2 Instances", "Subnets")
+            file_path: Path to the file where empty results were saved
+            details: Additional context about the request
+        """
+        failure_info = {
+            'resource_type': resource_type,
+            'file': str(file_path),
+            'details': details,
+            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        }
+        self.failed_empty_requests.append(failure_info)
+
+        Colors.perr(f"⚠ WARNING: {resource_type} request returned empty results")
+        Colors.perr(f"  File: {file_path}")
+        if details:
+            Colors.perr(f"  Details: {details}")
+        Colors.perr(f"  This may indicate:")
+        Colors.perr(f"    - Resources were deleted")
+        Colors.perr(f"    - Incorrect filters/tags")
+        Colors.perr(f"    - Permission issues")
+        Colors.perr(f"    - Resources not yet created")
 
     def run(self):
         """Main execution flow"""
+        # Get OCM cluster info first (to determine region)
+        self._get_ocm_cluster_info()
+
+        # Initialize AWS collector with determined region
+        self._initialize_aws_collector()
+
         # Initial credential validation (basic check)
         if not self.aws.validate_credentials():
             Colors.perr("\nAWS credential validation failed. Cannot proceed with data collection.")
             Colors.perr(f"\nRefresh AWS env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN.")
             sys.exit(1)
-
-        # Get OCM cluster info
-        self._get_ocm_cluster_info()
 
         # Validate credentials against cluster account
         if not self.aws.validate_credentials(cluster_data=self.cluster_data, cluster_id=self.cluster_id,
@@ -1137,6 +1219,98 @@ class ClusterDataCollector:
 
         # Save runtime configuration
         self._write_runtime_config()
+
+        # Report any failed empty requests
+        self._report_empty_request_failures()
+
+    def _report_empty_request_failures(self):
+        """Report summary of failed requests that returned empty results"""
+        if not self.failed_empty_requests:
+            return
+
+        Colors.hdr("Empty Resource Request Failures Summary")
+        Colors.perr(f"\n⚠ {len(self.failed_empty_requests)} resource request(s) returned empty results:\n")
+
+        for failure in self.failed_empty_requests:
+            Colors.perr(f"  • {failure['resource_type']}")
+            Colors.perr(f"    File: {failure['file']}")
+            if failure['details']:
+                Colors.perr(f"    Details: {failure['details']}")
+            Colors.perr(f"    Timestamp: {failure['timestamp']}")
+            Colors.perr("")
+
+        # Save failures to a JSON file for reference
+        failures_file = f"{self.file_prefix}_empty_resource_failures.json"
+        with open(failures_file, 'w') as f:
+            json.dump(self.failed_empty_requests, f, indent=2)
+        Colors.perr(f"Empty resource failures saved to: {failures_file}")
+        Colors.perr("")
+
+    def _initialize_aws_collector(self):
+        """Initialize AWS collector with the determined region"""
+        if not self.region:
+            Colors.perr("Error: Region not determined. Cannot initialize AWS collector.")
+            sys.exit(1)
+
+        # Initialize AWS collector with the region
+        self.aws = AWSCollector(region=self.region, debug=self.debug)
+
+        # Get cluster region for comparison
+        cluster_region = self.cluster_data.get('region', {}).get('id') if self.cluster_data else None
+
+        # Warn if there's a region mismatch
+        if cluster_region and self.region != cluster_region:
+            Colors.perr("\n" + "="*80)
+            Colors.perr("⚠ WARNING: Region Mismatch Detected!")
+            Colors.perr("="*80)
+            Colors.perr(f"Cluster region (from cluster.json): {cluster_region}")
+            Colors.perr(f"AWS region being used:             {self.region}")
+
+            # Explain where the region came from
+            if self.region_override:
+                Colors.perr(f"Region source:                      CLI argument (--region/-r)")
+            elif os.environ.get('AWS_REGION'):
+                Colors.perr(f"Region source:                      Environment variable (AWS_REGION)")
+            elif os.environ.get('AWS_DEFAULT_REGION'):
+                Colors.perr(f"Region source:                      Environment variable (AWS_DEFAULT_REGION)")
+            else:
+                # Check AWS config file
+                aws_config_file = os.path.expanduser('~/.aws/config')
+                region_from_config = False
+                if os.path.exists(aws_config_file):
+                    try:
+                        import configparser
+                        config = configparser.ConfigParser()
+                        config.read(aws_config_file)
+                        profile = os.environ.get('AWS_PROFILE')
+                        sections_to_try = []
+                        if profile:
+                            sections_to_try.append(f'profile {profile}')
+                            sections_to_try.append(profile)
+                        sections_to_try.append('default')
+
+                        for section in sections_to_try:
+                            if config.has_section(section) and config.has_option(section, 'region'):
+                                region_from_config = True
+                                if profile:
+                                    Colors.perr(f"Region source:                      AWS config file (profile: {profile})")
+                                else:
+                                    Colors.perr(f"Region source:                      AWS config file (default profile)")
+                                break
+                    except:
+                        pass
+
+                if not region_from_config:
+                    Colors.perr(f"Region source:                      Default fallback")
+
+            Colors.perr("")
+            Colors.perr("This may cause:")
+            Colors.perr("  - AWS API calls to fail (resources not found)")
+            Colors.perr("  - Empty or incomplete data collection")
+            Colors.perr("  - Incorrect resource queries")
+            Colors.perr("")
+            Colors.perr(f"Recommended action: Use --region {cluster_region} or set AWS_REGION={cluster_region}")
+            Colors.perr("="*80 + "\n")
 
     def _get_ocm_cluster_info(self):
         """Fetch cluster information from OCM"""
@@ -1175,7 +1349,22 @@ class ClusterDataCollector:
         self.multi_az = self.cluster_data.get('multi_az', False)
         self.availability_zones = self.cluster_data.get('nodes', {}).get('availability_zones', [])
 
-        print(f"Using DOMAIN_PREFIX:{self.domain_prefix}, INFRA_ID:{self.infra_id}")
+        # Extract region from cluster data
+        cluster_region = self.cluster_data.get('region', {}).get('id')
+
+        # Determine which region to use (CLI override takes precedence)
+        if self.region_override:
+            self.region = self.region_override
+            Colors.blue(f"Using CLI-provided region: {self.region}")
+        elif cluster_region:
+            self.region = cluster_region
+            Colors.blue(f"Using region from cluster.json: {self.region}")
+        else:
+            # Fallback to AWS_REGION env var or us-east-1
+            self.region = os.environ.get('AWS_REGION', 'us-east-1')
+            Colors.yellow(f"No region found in cluster.json, using fallback: {self.region}")
+
+        print(f"Using DOMAIN_PREFIX:{self.domain_prefix}, INFRA_ID:{self.infra_id}, REGION:{self.region}")
         if self.multi_az:
             Colors.blue(f"Multi-AZ cluster detected with zones: {', '.join(self.availability_zones)}")
         else:
@@ -1883,9 +2072,18 @@ class ClusterDataCollector:
 
         # Subnets
         subnets_file = f"{self.file_prefix}_subnets.json"
+        should_fetch = False
+
         if Path(subnets_file).exists():
-            Colors.green(f"Using existing subnets file: {subnets_file}")
+            if self._is_empty_resource_file(Path(subnets_file), ['Subnets']):
+                Colors.yellow(f"Existing file has empty subnets, re-fetching: {subnets_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing subnets file: {subnets_file}")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue("Fetching subnets from AWS...")
             try:
                 response = self.aws.describe_subnets(
@@ -1893,14 +2091,31 @@ class ClusterDataCollector:
                 )
                 with open(subnets_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(response.get('Subnets', [])) == 0:
+                    self._log_empty_request_failure(
+                        "Subnets",
+                        subnets_file,
+                        f"No subnets found matching infra_id: {self.infra_id}"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch subnets: {str(e)}")
 
         # Route Tables
         route_tables_file = f"{self.file_prefix}_route_tables.json"
+        should_fetch = False
+
         if Path(route_tables_file).exists():
-            Colors.green(f"Using existing route tables file: {route_tables_file}")
+            if self._is_empty_resource_file(Path(route_tables_file), ['RouteTables']):
+                Colors.yellow(f"Existing file has empty route tables, re-fetching: {route_tables_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing route tables file: {route_tables_file}")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue("Fetching route tables from AWS...")
             try:
                 response = self.aws.describe_route_tables(
@@ -1908,14 +2123,31 @@ class ClusterDataCollector:
                 )
                 with open(route_tables_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(response.get('RouteTables', [])) == 0:
+                    self._log_empty_request_failure(
+                        "Route Tables",
+                        route_tables_file,
+                        f"No route tables found matching infra_id: {self.infra_id}"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch route tables: {str(e)}")
 
         # Internet Gateways
         igw_file = f"{self.file_prefix}_internet_gateways.json"
+        should_fetch = False
+
         if Path(igw_file).exists():
-            Colors.green(f"Using existing internet gateways file: {igw_file}")
+            if self._is_empty_resource_file(Path(igw_file), ['InternetGateways']):
+                Colors.yellow(f"Existing file has empty internet gateways, re-fetching: {igw_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing internet gateways file: {igw_file}")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue("Fetching internet gateways from AWS...")
             try:
                 response = self.aws.describe_internet_gateways(
@@ -1923,14 +2155,31 @@ class ClusterDataCollector:
                 )
                 with open(igw_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results (note: private clusters won't have IGWs)
+                if len(response.get('InternetGateways', [])) == 0:
+                    self._log_empty_request_failure(
+                        "Internet Gateways",
+                        igw_file,
+                        f"No internet gateways found matching infra_id: {self.infra_id} (expected for private clusters)"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch internet gateways: {str(e)}")
 
         # NAT Gateways
         nat_file = f"{self.file_prefix}_nat_gateways.json"
+        should_fetch = False
+
         if Path(nat_file).exists():
-            Colors.green(f"Using existing NAT gateways file: {nat_file}")
+            if self._is_empty_resource_file(Path(nat_file), ['NatGateways']):
+                Colors.yellow(f"Existing file has empty NAT gateways, re-fetching: {nat_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing NAT gateways file: {nat_file}")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue("Fetching NAT gateways from AWS...")
             try:
                 response = self.aws.describe_nat_gateways(
@@ -1938,6 +2187,14 @@ class ClusterDataCollector:
                 )
                 with open(nat_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(response.get('NatGateways', [])) == 0:
+                    self._log_empty_request_failure(
+                        "NAT Gateways",
+                        nat_file,
+                        f"No NAT gateways found matching infra_id: {self.infra_id}"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch NAT gateways: {str(e)}")
 
@@ -2018,9 +2275,18 @@ class ClusterDataCollector:
 
         # EBS Volumes
         volumes_file = f"{self.file_prefix}_ebs_volumes.json"
+        should_fetch = False
+
         if Path(volumes_file).exists():
-            Colors.green(f"Using existing EBS volumes file: {volumes_file}")
+            if self._is_empty_resource_file(Path(volumes_file), ['Volumes']):
+                Colors.yellow(f"Existing file has empty EBS volumes, re-fetching: {volumes_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing EBS volumes file: {volumes_file}")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue("Fetching EBS volumes from AWS...")
             try:
                 response = self.aws.describe_volumes(
@@ -2028,6 +2294,14 @@ class ClusterDataCollector:
                 )
                 with open(volumes_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(response.get('Volumes', [])) == 0:
+                    self._log_empty_request_failure(
+                        "EBS Volumes",
+                        volumes_file,
+                        f"No EBS volumes found matching infra_id: {self.infra_id}"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch EBS volumes: {str(e)}")
 
@@ -2190,20 +2464,34 @@ class ClusterDataCollector:
                         ]
                     )
 
-                    # Flatten instances
+                    # Flatten instances (use same fields as main EC2 collection)
                     instances = []
                     for reservation in response.get('Reservations', []):
                         for instance in reservation.get('Instances', []):
                             instances.append({
                                 'InstanceId': instance.get('InstanceId'),
                                 'State': instance.get('State', {}).get('Name'),
+                                'LaunchTime': instance.get('LaunchTime').isoformat() if instance.get('LaunchTime') else None,
+                                'PrivateIpAddress': instance.get('PrivateIpAddress'),
+                                'PublicIpAddress': instance.get('PublicIpAddress'),
+                                'PrivateDnsName': instance.get('PrivateDnsName'),
+                                'PublicDnsName': instance.get('PublicDnsName'),
+                                'SecurityGroups': instance.get('SecurityGroups', []),
+                                'VpcId': instance.get('VpcId'),
+                                'SubnetId': instance.get('SubnetId'),
+                                'Placement': instance.get('Placement', {}),
                                 'InstanceType': instance.get('InstanceType'),
-                                'AvailabilityZone': instance.get('Placement', {}).get('AvailabilityZone'),
+                                'IamInstanceProfile': instance.get('IamInstanceProfile'),
+                                'ImageId': instance.get('ImageId'),
+                                'Architecture': instance.get('Architecture'),
+                                'RootDeviceName': instance.get('RootDeviceName'),
+                                'RootDeviceType': instance.get('RootDeviceType'),
+                                'BlockDeviceMappings': instance.get('BlockDeviceMappings', []),
                                 'Tags': instance.get('Tags', [])
                             })
 
                     with open(zone_instances_file, 'w') as f:
-                        json.dump({'Instances': instances}, f, indent=2)
+                        json.dump({'Instances': instances}, f, indent=2, default=str)
 
                     Colors.green(f"  Found {len(instances)} instance(s) in {zone}")
                 except Exception as e:
@@ -2234,13 +2522,27 @@ class ClusterDataCollector:
         Colors.hdr("Getting EC2 instance information")
 
         cluster_ec2_instances = f"{self.file_prefix}_ec2_instances.json"
+        should_fetch = False
 
+        # Check if file exists and has empty resources
         if Path(cluster_ec2_instances).exists():
-            Colors.green(f"using existing ec2 instances file: {cluster_ec2_instances}")
+            if self._is_empty_resource_file(Path(cluster_ec2_instances), ['Instances']):
+                Colors.yellow(f"Existing file has empty instances, re-fetching: {cluster_ec2_instances}")
+                should_fetch = True
+            else:
+                Colors.green(f"using existing ec2 instances file: {cluster_ec2_instances}")
         else:
-            Colors.blue("Fetching ec2 instances from AWS...")
+            should_fetch = True
+
+        if should_fetch:
+            Colors.blue(f"Fetching ec2 instances for infra_id '{self.infra_id}' from AWS...")
             try:
-                response = self.aws.describe_instances()
+                # Filter by cluster infra_id to avoid fetching all instances in the region
+                response = self.aws.describe_instances(
+                    filters=[
+                        {'Name': 'tag:Name', 'Values': [f'*{self.infra_id}*']}
+                    ]
+                )
 
                 # Flatten the response to extract instances
                 instances = []
@@ -2269,7 +2571,15 @@ class ClusterDataCollector:
                         })
 
                 with open(cluster_ec2_instances, 'w') as f:
-                    json.dump(instances, f, indent=2)
+                    json.dump(instances, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(instances) == 0:
+                    self._log_empty_request_failure(
+                        "EC2 Instances",
+                        cluster_ec2_instances,
+                        "No EC2 instances found"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch EC2 Instances: {str(e)}")
                 return
@@ -2465,10 +2775,18 @@ class ClusterDataCollector:
         Colors.hdr("Getting Security Group info")
 
         sg_file = f"{self.file_prefix}_security_groups.json"
+        should_fetch = False
 
         if Path(sg_file).exists():
-            Colors.green(f"Using existing security group file: {sg_file}")
+            if self._is_empty_resource_file(Path(sg_file), ['SecurityGroups']):
+                Colors.yellow(f"Existing file has empty security groups, re-fetching: {sg_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing security group file: {sg_file}")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue(f"Getting security groups with tags matching infra_id:{self.infra_id} ...")
             try:
                 response = self.aws.describe_security_groups(
@@ -2476,6 +2794,14 @@ class ClusterDataCollector:
                 )
                 with open(sg_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(response.get('SecurityGroups', [])) == 0:
+                    self._log_empty_request_failure(
+                        "Security Groups",
+                        sg_file,
+                        f"No security groups found matching infra_id: {self.infra_id}"
+                    )
             except Exception as e:
                 Colors.perr(f"Error fetching security group info from AWS: {str(e)}")
 
@@ -2486,15 +2812,31 @@ class ClusterDataCollector:
         Colors.hdr("Getting Load Balancers")
 
         lb_all_file = f"{self.file_prefix}_load_balancers_all.json"
+        should_fetch = False
 
         if Path(lb_all_file).exists():
-            Colors.green(f"Using existing all load balancers json file {lb_all_file} ...")
+            if self._is_empty_resource_file(Path(lb_all_file), ['LoadBalancers']):
+                Colors.yellow(f"Existing file has empty load balancers, re-fetching: {lb_all_file}")
+                should_fetch = True
+            else:
+                Colors.green(f"Using existing all load balancers json file {lb_all_file} ...")
         else:
+            should_fetch = True
+
+        if should_fetch:
             Colors.blue("Fetching all load balancers from AWS...")
             try:
                 response = self.aws.describe_load_balancers()
                 with open(lb_all_file, 'w') as f:
                     json.dump(response, f, indent=2, default=str)
+
+                # Check if we got empty results
+                if len(response.get('LoadBalancers', [])) == 0:
+                    self._log_empty_request_failure(
+                        "Load Balancers",
+                        lb_all_file,
+                        "No load balancers found in region"
+                    )
             except Exception as e:
                 Colors.perr(f"Failed to fetch load balancers from AWS: {str(e)}")
 
@@ -2649,7 +2991,7 @@ def show_help():
 ROSA Cluster Data Collection Tool
 
 SYNOPSIS:
-  get_install_artifacts.py -c|--cluster <cluster-id> [-d|--dir <directory>]
+  get_install_artifacts.py -c|--cluster <cluster-id> [-d|--dir <directory>] [-r|--region <region>]
   get_install_artifacts.py -h|--help
 
 DESCRIPTION:
@@ -2665,6 +3007,7 @@ DESCRIPTION:
 OPTIONS:
   -c, --cluster <cluster-id>    ROSA cluster ID to collect data for
   -d, --dir <directory>         Directory for reading/writing files (default: current directory)
+  -r, --region <region>         AWS region (default: uses region from cluster.json)
   -s, --start <date>            CloudTrail start date in format: YYYY-MM-DDTHH:MM:SSZ
   -e, --elapsed <time>          CloudTrail capture window (e.g., "3h", "2d", "4days")
   -p, --period <seconds>        CloudWatch metrics period in seconds (default: 300)
@@ -2679,6 +3022,9 @@ EXAMPLES:
 
   # Use custom time window
   ./get_install_artifacts.py -c <clusterid> -s 2025-01-15T10:30:00Z -e 3h
+
+  # Specify AWS region explicitly
+  ./get_install_artifacts.py -c <clusterid> -r us-west-2
 
   # Enable debug output to troubleshoot proxy/credential issues
   ./get_install_artifacts.py -c <clusterid> --debug
@@ -2695,6 +3041,7 @@ def main():
 
     parser.add_argument('-c', '--cluster', required=False, help='ROSA cluster ID')
     parser.add_argument('-d', '--dir', default='.', help='Working directory (default: current directory)')
+    parser.add_argument('-r', '--region', help='AWS region (default: region from cluster.json)')
     parser.add_argument('-s', '--start', help='Start date (YYYY-MM-DDTHH:MM:SSZ)')
     parser.add_argument('-e', '--elapsed', help='Elapsed time (e.g., "3h", "2days")')
     parser.add_argument('-p', '--period', type=int, default=300, help='CloudWatch metrics period in seconds')
@@ -2718,6 +3065,7 @@ def main():
     collector = ClusterDataCollector(
         cluster_id=args.cluster,
         work_dir=args.dir,
+        region=args.region,
         start_date=args.start,
         elapsed_time=args.elapsed,
         period=args.period,

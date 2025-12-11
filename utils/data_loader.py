@@ -1,6 +1,7 @@
 """Data loader for cluster artifacts"""
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from models.cluster import ClusterData
@@ -15,6 +16,9 @@ def load_json_file(file_path: Path) -> Optional[Dict[str, Any]]:
 
     Returns:
         Parsed JSON data or None if file doesn't exist
+
+    Raises:
+        json.JSONDecodeError: If the JSON file is malformed (with detailed diagnostics)
     """
     if not file_path.exists():
         return None
@@ -22,9 +26,51 @@ def load_json_file(file_path: Path) -> Optional[Dict[str, Any]]:
     try:
         with open(file_path, 'r') as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"Warning: Failed to load {file_path}: {e}")
-        return None
+    except json.JSONDecodeError as e:
+        # Provide detailed error information for corrupted/incomplete JSON files
+        print(f"\n{'='*80}", file=sys.stderr)
+        print(f"❌ ERROR: Corrupted or incomplete JSON file", file=sys.stderr)
+        print(f"{'='*80}", file=sys.stderr)
+        print(f"File: {file_path}", file=sys.stderr)
+        print(f"Error: {e.msg}", file=sys.stderr)
+        print(f"Location: line {e.lineno}, column {e.colno} (character position {e.pos})", file=sys.stderr)
+
+        # Show the problematic line
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                if e.lineno > 0 and e.lineno <= len(lines):
+                    print(f"\nProblematic line {e.lineno}:", file=sys.stderr)
+                    problem_line = lines[e.lineno - 1].rstrip()
+                    print(f"  {problem_line}", file=sys.stderr)
+                    # Show pointer to exact column
+                    if e.colno > 0:
+                        print(f"  {' ' * (e.colno - 1)}^", file=sys.stderr)
+        except Exception:
+            pass
+
+        print(f"\n{'─'*80}", file=sys.stderr)
+        print(f"Possible causes:", file=sys.stderr)
+        print(f"  • The data collection script (get_install_artifacts.py) was interrupted", file=sys.stderr)
+        print(f"  • Network timeout during AWS API call", file=sys.stderr)
+        print(f"  • Disk full or I/O error while writing file", file=sys.stderr)
+        print(f"  • File was manually edited and has syntax errors", file=sys.stderr)
+
+        print(f"\n{'─'*80}", file=sys.stderr)
+        print(f"How to fix:", file=sys.stderr)
+        print(f"  1. Delete the corrupted file:", file=sys.stderr)
+        print(f"     rm {file_path}", file=sys.stderr)
+        print(f"  2. Re-run data collection for this cluster:", file=sys.stderr)
+        print(f"     eval $(ocm backplane cloud credentials <cluster-id> -o env)", file=sys.stderr)
+        print(f"     ./get_install_artifacts.py -c <cluster-id> -d {file_path.parent}", file=sys.stderr)
+        print(f"{'='*80}\n", file=sys.stderr)
+
+        # Re-raise the exception with original details
+        raise
+    except IOError as e:
+        print(f"\n❌ ERROR: Failed to read file: {file_path}", file=sys.stderr)
+        print(f"   {e}", file=sys.stderr)
+        raise
 
 
 def load_cluster_data(data_dir: Path) -> ClusterData:
@@ -101,9 +147,19 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
     instances_data = load_json_file(instances_file)
     if instances_data:
         if isinstance(instances_data, list):
-            cluster_data.ec2_instances = instances_data
+            # Flatten nested list structure from AWS CLI query Reservations[*].Instances[*]
+            # This results in list[list[dict]] which needs to be flattened to list[dict]
+            flattened_instances = []
+            for item in instances_data:
+                if isinstance(item, list):
+                    # Nested list - flatten it
+                    flattened_instances.extend(item)
+                elif isinstance(item, dict):
+                    # Already a dict - keep it
+                    flattened_instances.append(item)
+            cluster_data.ec2_instances = flattened_instances
         else:
-            # Handle both formats
+            # Handle dict format with 'Instances' key
             cluster_data.ec2_instances = instances_data.get('Instances', [])
 
     # Load CloudTrail events

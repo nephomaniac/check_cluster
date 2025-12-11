@@ -5,9 +5,11 @@ Generates interactive HTML reports from pytest results.
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import traceback
 
 
 class HTMLReportGenerator:
@@ -30,8 +32,22 @@ class HTMLReportGenerator:
         if not self.json_report_path.exists():
             raise FileNotFoundError(f"JSON report not found: {self.json_report_path}")
 
-        with open(self.json_report_path, 'r') as f:
-            return json.load(f)
+        try:
+            with open(self.json_report_path, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            # Provide detailed error information
+            print(f"\n❌ Error: Failed to parse JSON report file: {self.json_report_path}", file=sys.stderr)
+            print(f"   JSONDecodeError: {e.msg}", file=sys.stderr)
+            print(f"   Location: line {e.lineno}, column {e.colno} (char {e.pos})", file=sys.stderr)
+            print(f"\n   The JSON report file may be incomplete or corrupted.", file=sys.stderr)
+            print(f"   This can happen if pytest was interrupted or failed to complete.", file=sys.stderr)
+            print(f"\n   Try running the tests again with: ./run_tests.py --cluster-dir <cluster-dir>", file=sys.stderr)
+            raise
+        except Exception as e:
+            print(f"\n❌ Error: Unexpected error reading JSON report: {self.json_report_path}", file=sys.stderr)
+            print(f"   {type(e).__name__}: {e}", file=sys.stderr)
+            raise
 
     def _get_test_summary(self) -> Dict[str, int]:
         """Get test count summary"""
@@ -223,6 +239,98 @@ class HTMLReportGenerator:
 
         return '\n'.join(html_parts)
 
+    def _extract_status_reason(self, test: Dict[str, Any]) -> str:
+        """Extract status reason from test output"""
+        outcome = test.get('outcome', 'unknown')
+        call_info = test.get('call', {})
+        stdout = call_info.get('stdout', '')
+
+        if outcome == 'passed':
+            # Look for ✓ success message
+            if stdout:
+                lines = stdout.split('\n')
+                success_lines = [line for line in lines if line.startswith('✓')]
+                if success_lines:
+                    return success_lines[0]
+            return 'All validations passed'
+
+        elif outcome == 'failed':
+            # Look for ✗ failure message
+            if stdout:
+                lines = stdout.split('\n')
+                failure_lines = [line for line in lines if line.startswith('✗')]
+                if failure_lines:
+                    return failure_lines[0]
+            # Fallback to longrepr
+            longrepr = call_info.get('longrepr', '')
+            if 'AssertionError: ' in longrepr:
+                return longrepr.split('AssertionError: ')[-1].split('\n')[0]
+            return longrepr.split('\n')[0] if '\n' in longrepr else longrepr[:200]
+
+        elif outcome == 'skipped':
+            longrepr = call_info.get('longrepr', 'Skipped')
+            if isinstance(longrepr, str) and 'Skipped:' in longrepr:
+                reason = longrepr.split('Skipped:')[1].strip()
+                # Remove trailing quote and paren from tuple representation
+                if reason.endswith("')"):
+                    reason = reason[:-2]
+                elif reason.endswith("'"):
+                    reason = reason[:-1]
+                return f'Skipped: {reason}'
+            return str(longrepr)
+
+        return 'Unknown status'
+
+    def _extract_json_output(self, test: Dict[str, Any]) -> List[str]:
+        """Extract JSON blocks from test stdout"""
+        call_info = test.get('call', {})
+        stdout = call_info.get('stdout', '')
+
+        if not stdout:
+            return []
+
+        json_blocks = []
+        lines = stdout.split('\n')
+        current_json = []
+        in_json = False
+        bracket_depth = 0
+        brace_depth = 0
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Detect start of JSON (array or object at start of line)
+            if not in_json and (stripped.startswith('[') or stripped.startswith('{')):
+                in_json = True
+                current_json = [line]
+                # Count brackets/braces in this line
+                bracket_depth = line.count('[') - line.count(']')
+                brace_depth = line.count('{') - line.count('}')
+            elif in_json:
+                current_json.append(line)
+                # Update depth counts
+                bracket_depth += line.count('[') - line.count(']')
+                brace_depth += line.count('{') - line.count('}')
+
+                # Check if we've closed all brackets and braces
+                if bracket_depth == 0 and brace_depth == 0:
+                    # Try to parse the complete JSON
+                    try:
+                        json_str = '\n'.join(current_json)
+                        json.loads(json_str)
+                        # Valid JSON - save it
+                        json_blocks.append(json_str)
+                        in_json = False
+                        current_json = []
+                    except json.JSONDecodeError:
+                        # Invalid JSON, reset and continue
+                        in_json = False
+                        current_json = []
+                        bracket_depth = 0
+                        brace_depth = 0
+
+        return json_blocks
+
     def _generate_tests_html(self, tests: List[Dict[str, Any]]) -> str:
         """Generate HTML for test results with collapsible details"""
         html_parts = []
@@ -257,24 +365,28 @@ class HTMLReportGenerator:
             # Parse docstring for description parts
             description_html = self._parse_test_description(test_doc)
 
-            # Get failure/skip reason
-            call_info = test.get('call', {})
-            longrepr = call_info.get('longrepr', '')
-
-            status_reason = ''
-            if outcome == 'failed' and longrepr:
-                # Extract assertion message
-                if 'AssertionError: ' in longrepr:
-                    status_reason = longrepr.split('AssertionError: ')[-1].split('\n')[0]
-                else:
-                    status_reason = longrepr.split('\n')[0] if '\n' in longrepr else longrepr[:200]
-            elif outcome == 'skipped':
-                status_reason = call_info.get('longrepr', 'Skipped')
-            elif outcome == 'passed':
-                status_reason = 'All validations passed'
+            # Extract status reason and JSON output
+            status_reason = self._extract_status_reason(test)
+            json_blocks = self._extract_json_output(test)
 
             # Get short display name
             display_name = test_name.replace('test_', '').replace('_', ' ').title()
+
+            # Import escape at the top of the method
+            from html import escape
+
+            # Generate JSON output HTML
+            json_output_html = ''
+            if json_blocks:
+                json_output_html = '<div class="detail-section"><h4>Test Output</h4>'
+                for json_block in json_blocks:
+                    # Escape HTML entities
+                    escaped_json = escape(json_block)
+                    json_output_html += f'<pre class="json-output"><code>{escaped_json}</code></pre>'
+                json_output_html += '</div>'
+
+            # Escape status reason for safe HTML display
+            escaped_status_reason = escape(status_reason)
 
             html_parts.append(f"""
                         <tr class="{status_class}">
@@ -311,8 +423,9 @@ class HTMLReportGenerator:
                                     </div>
                                     <div class="detail-section">
                                         <h4>Status Reason</h4>
-                                        <div class="status-reason {status_class}">{status_reason}</div>
+                                        <div class="status-reason {status_class}">{escaped_status_reason}</div>
                                     </div>
+                                    {json_output_html}
                                     <div class="detail-section">
                                         <h4>Test Description</h4>
                                         {description_html}
@@ -550,13 +663,14 @@ class HTMLReportGenerator:
         }
 
         .category-content {
-            max-height: 2000px;
-            overflow: hidden;
+            max-height: none;
+            overflow: visible;
             transition: max-height 0.3s ease-in-out;
         }
 
         .category-content.hidden {
             max-height: 0;
+            overflow: hidden;
         }
 
         .test-table {
@@ -674,6 +788,8 @@ class HTMLReportGenerator:
         .test-details-content {
             padding: 20px;
             border-left: 4px solid #007bff;
+            max-height: 800px;
+            overflow-y: auto;
         }
 
         .detail-section {
@@ -682,6 +798,12 @@ class HTMLReportGenerator:
 
         .detail-section:last-child {
             margin-bottom: 0;
+        }
+
+        /* Ensure individual detail sections are scrollable if content is too long */
+        .detail-section pre {
+            max-height: 400px;
+            overflow-y: auto;
         }
 
         .detail-section h4 {
@@ -786,6 +908,35 @@ class HTMLReportGenerator:
             font-size: 14px;
             color: #999;
             font-style: italic;
+        }
+
+        /* JSON Output Styling */
+        .json-output {
+            background: #2d2d2d !important;
+            color: #f8f8f2 !important;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+            max-height: 400px;
+            overflow-y: auto;
+            overflow-x: auto;
+        }
+
+        .json-output code {
+            color: #f8f8f2;
+            background: transparent;
+            padding: 0;
+        }
+
+        /* Enhanced Status Reason Styling */
+        .status-reason.status-pass {
+            background: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
         }
     </style>"""
 
