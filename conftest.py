@@ -128,11 +128,33 @@ def pytest_configure(config):
     )
 
 
+def pytest_runtest_setup(item):
+    """Hook called before each test runs - reset per-test file tracking"""
+    # This hook runs BEFORE setup phase, so we can reset tracking here
+    # We need to manually get the cluster_data from the fixture manager if it exists
+    if 'cluster_data' in item.fixturenames:
+        try:
+            # Try to get the cluster_data fixture if it's already been created
+            # (it's session-scoped, so it exists after the first test)
+            from _pytest.fixtures import FixtureLookupError
+            try:
+                fixture_def = item.session._fixturemanager._arg2fixturedefs.get('cluster_data')
+                if fixture_def and fixture_def[0].cached_result:
+                    cluster_data = fixture_def[0].cached_result[0]
+                    cluster_data.reset_test_file_tracking()
+            except (AttributeError, IndexError, KeyError):
+                # Fixture not created yet, will reset later
+                pass
+        except ImportError:
+            pass
+
+
 def pytest_runtest_makereport(item, call):
     """Hook to capture test docstrings and output for HTML/JSON report"""
     # Get the pytest report
     outcome = pytest.TestReport.from_item_and_call(item, call)
 
+    # Capture files accessed during call phase (the actual test execution)
     if call.when == "call":
         # Get the test function's docstring
         if item.function.__doc__:
@@ -143,255 +165,12 @@ def pytest_runtest_makereport(item, call):
         if hasattr(outcome, 'capstdout'):
             item.user_properties.append(("captured_output", outcome.capstdout))
 
+        # Capture file sources from cluster_data fixture (only files accessed by this test)
+        if 'cluster_data' in item.funcargs:
+            cluster_data = item.funcargs['cluster_data']
+            files_accessed = cluster_data.get_test_files_accessed()
+            attrs_no_files = cluster_data.get_test_attributes_with_no_files()
+            item.user_properties.append(("files_accessed", files_accessed))
+            item.user_properties.append(("attributes_no_files", attrs_no_files))
+
     return outcome
-
-
-def pytest_html_results_table_header(cells):
-    """Customize HTML report table header"""
-    cells.insert(2, '<th>Status Reason</th>')
-    cells.insert(3, '<th>Test Output</th>')
-    cells.insert(1, '<th class="sortable time" data-column-type="time">Duration</th>')
-
-
-def pytest_html_results_table_row(report, cells):
-    """Customize HTML report table rows to include JSON output and status reason"""
-    from html import escape
-    import json as json_module
-    import re
-
-    # Add duration
-    cells.insert(1, f'<td class="col-duration">{report.duration:.2f}s</td>')
-
-    # Extract status reason
-    status_reason_html = '<td class="col-status-reason">'
-
-    if report.passed:
-        # For passed tests, extract the success message
-        if hasattr(report, 'capstdout') and report.capstdout:
-            lines = report.capstdout.split('\n')
-            success_lines = [line for line in lines if line.startswith('✓')]
-            if success_lines:
-                reason = escape(success_lines[0])
-                status_reason_html += f'<span style="color: #27ae60; font-weight: 600;">{reason}</span>'
-            else:
-                status_reason_html += '<span style="color: #27ae60;">Passed</span>'
-        else:
-            status_reason_html += '<span style="color: #27ae60;">Passed</span>'
-
-    elif report.failed:
-        # For failed tests, extract the failure message
-        if hasattr(report, 'capstdout') and report.capstdout:
-            lines = report.capstdout.split('\n')
-            failure_lines = [line for line in lines if line.startswith('✗')]
-            if failure_lines:
-                reason = escape(failure_lines[0])
-                status_reason_html += f'<span style="color: #e74c3c; font-weight: 600;">{reason}</span>'
-            else:
-                status_reason_html += '<span style="color: #e74c3c;">Failed</span>'
-        elif hasattr(report, 'longrepr'):
-            # Extract assertion error message
-            error_msg = str(report.longrepr).split('\n')[0] if report.longrepr else 'Failed'
-            status_reason_html += f'<span style="color: #e74c3c; font-weight: 600;">{escape(error_msg[:100])}</span>'
-        else:
-            status_reason_html += '<span style="color: #e74c3c;">Failed</span>'
-
-    elif report.skipped:
-        # For skipped tests, extract the skip reason
-        if hasattr(report, 'wasxfail'):
-            reason = f"Expected failure: {report.wasxfail}"
-            status_reason_html += f'<span style="color: #f39c12; font-style: italic;">{escape(reason)}</span>'
-        elif hasattr(report, 'longrepr') and report.longrepr:
-            # Extract skip reason from longrepr (format: ('path', line, 'Skipped: reason'))
-            skip_msg = str(report.longrepr)
-            if 'Skipped:' in skip_msg:
-                # Extract just the skip message, removing file path and line number
-                reason = skip_msg.split('Skipped:')[1].strip()
-                # Remove trailing quote and paren if present
-                if reason.endswith("')"):
-                    reason = reason[:-2]
-                elif reason.endswith("'"):
-                    reason = reason[:-1]
-                status_reason_html += f'<span style="color: #f39c12; font-style: italic;">Skipped: {escape(reason)}</span>'
-            else:
-                status_reason_html += f'<span style="color: #f39c12; font-style: italic;">Skipped</span>'
-        else:
-            status_reason_html += '<span style="color: #f39c12; font-style: italic;">Skipped</span>'
-
-    status_reason_html += '</td>'
-    cells.insert(2, status_reason_html)
-
-    # Extract and format test output (JSON objects)
-    output_html = '<td class="col-output">'
-
-    if hasattr(report, 'capstdout') and report.capstdout:
-        output = report.capstdout
-
-        # Look for JSON blocks in the output
-        json_blocks = []
-        lines = output.split('\n')
-        current_json = []
-        in_json = False
-
-        for line in lines:
-            # Detect start of JSON
-            if line.strip().startswith('[') or line.strip().startswith('{'):
-                in_json = True
-                current_json = [line]
-            elif in_json:
-                current_json.append(line)
-                # Try to parse accumulated JSON
-                try:
-                    json_str = '\n'.join(current_json)
-                    json_module.loads(json_str)
-                    # Valid JSON - save it
-                    json_blocks.append(json_str)
-                    in_json = False
-                    current_json = []
-                except json_module.JSONDecodeError:
-                    # Keep accumulating
-                    pass
-
-        # Format output with syntax highlighting
-        formatted_output = []
-        for block in json_blocks:
-            # Add syntax-highlighted JSON
-            formatted_output.append(f'<pre class="json-output" style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto;"><code>{escape(block)}</code></pre>')
-
-        if formatted_output:
-            output_html += ''.join(formatted_output)
-        else:
-            # Show text output if no JSON found
-            text_lines = [line for line in lines if line and not line.startswith('✓') and not line.startswith('✗')]
-            if text_lines:
-                output_html += f'<pre style="font-size: 0.9em;">{escape(chr(10).join(text_lines))}</pre>'
-            else:
-                output_html += '<em style="color: #888;">No JSON output</em>'
-    else:
-        output_html += '<em style="color: #888;">No output</em>'
-
-    output_html += '</td>'
-    cells.insert(3, output_html)
-
-
-def pytest_html_report_title(report):
-    """Customize HTML report title"""
-    report.title = "ROSA Cluster Health Check Results"
-
-
-def pytest_html_results_summary(prefix, summary, postfix):
-    """Add custom summary information to HTML report"""
-    prefix.extend([
-        '<p style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 10px 0;">',
-        '<strong>Test Report Information:</strong><br>',
-        'This report shows the results of ROSA cluster health checks. ',
-        'Tests marked with ✓ show the JSON objects that met expectations. ',
-        'Tests marked with ✗ show what was expected but not found.',
-        '</p>'
-    ])
-
-
-def pytest_html_results_table_html(report, data):
-    """Add custom CSS for JSON output in HTML report"""
-    if not hasattr(report, 'extra_css'):
-        report.extra_css = []
-
-    report.extra_css.append("""
-        <style>
-            .json-output {
-                background: #2d2d2d !important;
-                color: #f8f8f2 !important;
-                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
-                font-size: 12px;
-                line-height: 1.5;
-                border: 1px solid #444;
-                max-height: 400px;
-                overflow-y: auto;
-            }
-
-            .json-output code {
-                color: #f8f8f2;
-            }
-
-            .col-status-reason {
-                max-width: 400px;
-                font-size: 13px;
-                padding: 8px 12px;
-            }
-
-            .col-status-reason span {
-                display: inline-block;
-                padding: 4px 0;
-            }
-
-            .col-output {
-                max-width: 600px;
-                font-size: 13px;
-            }
-
-            .col-output div {
-                margin-bottom: 8px;
-            }
-
-            .col-output pre {
-                margin: 5px 0;
-                white-space: pre-wrap;
-                word-wrap: break-word;
-            }
-
-            .col-duration {
-                text-align: right;
-                font-family: monospace;
-            }
-
-            /* Success/Failure indicators */
-            td.col-result.passed {
-                background-color: #dff0d8 !important;
-            }
-
-            td.col-result.failed {
-                background-color: #f2dede !important;
-            }
-
-            td.col-result.skipped {
-                background-color: #fcf8e3 !important;
-            }
-
-            /* Table styling */
-            table {
-                border-collapse: collapse;
-                width: 100%;
-            }
-
-            th {
-                background-color: #337ab7 !important;
-                color: white !important;
-                padding: 10px !important;
-                text-align: left;
-            }
-
-            td {
-                padding: 8px !important;
-                border-bottom: 1px solid #ddd;
-                vertical-align: top;
-            }
-
-            tr:hover {
-                background-color: #f5f5f5;
-            }
-
-            /* Collapsible sections */
-            .collapsible {
-                cursor: pointer;
-                padding: 10px;
-                background-color: #f0f0f0;
-                border: none;
-                text-align: left;
-                width: 100%;
-                font-weight: bold;
-            }
-
-            .collapsible:hover {
-                background-color: #e0e0e0;
-            }
-        </style>
-    """)

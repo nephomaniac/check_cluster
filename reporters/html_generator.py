@@ -388,6 +388,9 @@ class HTMLReportGenerator:
             # Escape status reason for safe HTML display
             escaped_status_reason = escape(status_reason)
 
+            # Generate sources section
+            sources_html = self._generate_sources_html(test)
+
             html_parts.append(f"""
                         <tr class="{status_class}">
                             <td class="test-name">{display_name}</td>
@@ -430,11 +433,109 @@ class HTMLReportGenerator:
                                         <h4>Test Description</h4>
                                         {description_html}
                                     </div>
+                                    {sources_html}
                                 </div>
                             </td>
                         </tr>""")
 
         return '\n'.join(html_parts)
+
+    def _generate_sources_html(self, test: Dict[str, Any]) -> str:
+        """Generate Sources section HTML with file tracking information"""
+        from html import escape
+        import os
+
+        # Extract file sources from user_properties
+        files_accessed = {}
+        attrs_no_files = []
+
+        user_properties = test.get('user_properties', [])
+        if user_properties and isinstance(user_properties, list):
+            for prop in user_properties:
+                if isinstance(prop, dict):
+                    if 'files_accessed' in prop:
+                        files_accessed = prop['files_accessed']
+                    elif 'attributes_no_files' in prop:
+                        attrs_no_files = prop['attributes_no_files']
+
+        if not files_accessed and not attrs_no_files:
+            return ''
+
+        html = '<div class="detail-section sources-section">'
+        html += '<details style="margin: 10px 0;">'
+        html += '<summary style="cursor: pointer; font-weight: bold; color: #2c3e50; padding: 8px; background: #ecf0f1; border-radius: 4px; user-select: none;">'
+        html += '📁 Sources'
+        html += '</summary>'
+        html += '<div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">'
+
+        if files_accessed:
+            html += '<table class="sources-table" style="width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 10px;">'
+            html += '<thead>'
+            html += '<tr style="background: #34495e; color: #ffffff; font-weight: 600;">'
+            html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd; color: #ffffff;">File Name</th>'
+            html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd; color: #ffffff;">Size</th>'
+            html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd; color: #ffffff;">Created</th>'
+            html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd; color: #ffffff;">Modified</th>'
+            html += '</tr>'
+            html += '</thead>'
+            html += '<tbody>'
+
+            for file_path, metadata in sorted(files_accessed.items()):
+                file_name = metadata.get('name', os.path.basename(file_path))
+                size_bytes = metadata.get('size', 0)
+
+                # Format size
+                if size_bytes < 1024:
+                    size_str = f"{size_bytes} B"
+                elif size_bytes < 1024 * 1024:
+                    size_str = f"{size_bytes / 1024:.1f} KB"
+                else:
+                    size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+                # Format timestamps
+                created_ts = metadata.get('created', 0)
+                modified_ts = metadata.get('modified', 0)
+                created_str = datetime.fromtimestamp(created_ts).strftime('%Y-%m-%d %H:%M:%S') if created_ts else 'N/A'
+                modified_str = datetime.fromtimestamp(modified_ts).strftime('%Y-%m-%d %H:%M:%S') if modified_ts else 'N/A'
+
+                html += '<tr style="background: white;">'
+                html += f'<td style="padding: 6px; border: 1px solid #ddd; font-family: monospace; font-size: 0.9em;" title="{escape(file_path)}">{escape(file_name)}</td>'
+                html += f'<td style="padding: 6px; border: 1px solid #ddd; text-align: right;">{size_str}</td>'
+                html += f'<td style="padding: 6px; border: 1px solid #ddd;">{created_str}</td>'
+                html += f'<td style="padding: 6px; border: 1px solid #ddd;">{modified_str}</td>'
+                html += '</tr>'
+
+            html += '</tbody>'
+            html += '</table>'
+
+        # Show attributes that were accessed but have no files
+        if attrs_no_files:
+            # Map attribute names to expected file patterns
+            attr_to_expected_files = {
+                'cloudtrail_events': '*_*.cloudtrail.json',
+                'resources': '*_resources.json',
+                'security_groups': '*_security_groups.json',
+                'load_balancers': '*_load_balancers_all.json',
+                'ec2_instances': '*_ec2_instances.json',
+                'vpcs': '*_vpc-*_VPC.json or *_VPC_IDS.json',
+                'route53_zones': '*_hosted_zones.json',
+                'cluster_context': '*_cluster_context.json',
+            }
+
+            html += '<div style="margin-top: 10px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">'
+            html += '<strong style="color: #856404;">⚠ Expected Files Not Found:</strong>'
+            html += '<ul style="margin: 5px 0; padding-left: 20px;">'
+            for attr in attrs_no_files:
+                expected_pattern = attr_to_expected_files.get(attr, f'*_{attr}.json')
+                html += f'<li style="font-family: monospace; font-size: 0.85em; color: #856404;">Expected: {escape(expected_pattern)} (for {attr})</li>'
+            html += '</ul>'
+            html += '</div>'
+
+        html += '</div>'  # Close details content
+        html += '</details>'
+        html += '</div>'  # Close sources-section
+
+        return html
 
     def _parse_test_description(self, docstring: str) -> str:
         """Parse test docstring into structured HTML"""

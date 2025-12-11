@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 from pathlib import Path
+import os
 
 
 @dataclass
@@ -30,6 +31,16 @@ class ClusterData:
     # Additional data
     cluster_context: Dict[str, Any] = field(default_factory=dict)
     resources: Dict[str, Any] = field(default_factory=dict)
+
+    # File tracking for test reporting
+    files_loaded: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    files_missing: List[str] = field(default_factory=list)
+
+    # Per-test file access tracking
+    _files_accessed_in_current_test: Dict[str, Dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    _attributes_accessed_with_no_files: List[str] = field(default_factory=list, init=False, repr=False)
+    _attribute_to_files: Dict[str, List[str]] = field(default_factory=dict, init=False, repr=False)
+    _tracking_enabled: bool = field(default=True, init=False, repr=False)
 
     @property
     def infra_id(self) -> str:
@@ -115,3 +126,115 @@ class ClusterData:
             if any(self.infra_id in tag.get('Value', '') for tag in tags):
                 instances.append(inst)
         return instances
+
+    def __getattribute__(self, name: str) -> Any:
+        """Override to track attribute access for per-test file tracking"""
+        # Get the value using the parent implementation
+        value = object.__getattribute__(self, name)
+
+        # Track file access if this is a data attribute and tracking is enabled
+        if object.__getattribute__(self, '_tracking_enabled'):
+            # Track data attributes
+            if name in ['cluster_json', 'security_groups', 'ec2_instances', 'load_balancers',
+                       'vpcs', 'route53_zones', 'cloudtrail_events', 'cluster_context', 'resources']:
+                self._mark_attribute_accessed(name)
+            # Track when tests access data_dir or cluster_id (they depend on cluster.json)
+            elif name == 'cluster_id':
+                self._mark_attribute_accessed('cluster_json')
+            # Wrap data_dir in TrackedPath for automatic file tracking
+            elif name == 'data_dir':
+                self._mark_attribute_accessed('cluster_json')
+                # Import here to avoid circular dependency
+                from utils.tracked_path import TrackedPath
+                return TrackedPath(value, self)
+
+        return value
+
+    def _mark_attribute_accessed(self, attr_name: str) -> None:
+        """Mark that a data attribute was accessed in the current test"""
+        # Temporarily disable tracking to avoid infinite recursion
+        object.__setattr__(self, '_tracking_enabled', False)
+
+        try:
+            # Get the mapping of attributes to files
+            attr_to_files = object.__getattribute__(self, '_attribute_to_files')
+            files_accessed = object.__getattribute__(self, '_files_accessed_in_current_test')
+            files_loaded = object.__getattribute__(self, 'files_loaded')
+            attrs_no_files = object.__getattribute__(self, '_attributes_accessed_with_no_files')
+
+            # Get the files associated with this attribute
+            file_paths = attr_to_files.get(attr_name, [])
+
+            if file_paths:
+                # Add these files to the current test's accessed files
+                for file_path in file_paths:
+                    if file_path in files_loaded:
+                        files_accessed[file_path] = files_loaded[file_path]
+            else:
+                # Attribute was accessed but has no registered files
+                # Track this so we can show "expected but not found"
+                if attr_name not in attrs_no_files:
+                    attrs_no_files.append(attr_name)
+        finally:
+            # Re-enable tracking
+            object.__setattr__(self, '_tracking_enabled', True)
+
+    def register_attribute_file(self, attr_name: str, file_path: str) -> None:
+        """Register which file(s) provide data for a specific attribute"""
+        if attr_name not in self._attribute_to_files:
+            self._attribute_to_files[attr_name] = []
+        if file_path not in self._attribute_to_files[attr_name]:
+            self._attribute_to_files[attr_name].append(file_path)
+
+    def reset_test_file_tracking(self) -> None:
+        """Reset per-test file access tracking (called at start of each test)"""
+        self._files_accessed_in_current_test = {}
+        self._attributes_accessed_with_no_files = []
+
+    def get_test_files_accessed(self) -> Dict[str, Dict[str, Any]]:
+        """Get files accessed during the current test"""
+        return self._files_accessed_in_current_test.copy()
+
+    def get_test_attributes_with_no_files(self) -> List[str]:
+        """Get attributes that were accessed but have no registered files"""
+        return self._attributes_accessed_with_no_files.copy()
+
+    def _track_direct_file_access(self, file_path: Path) -> None:
+        """
+        Track direct file access (files opened/checked outside of ClusterData attributes).
+
+        This is called by TrackedPath when tests use cluster_data.data_dir to:
+        - Construct file paths
+        - Glob for files
+        - Check file existence
+        - Open files directly
+
+        Args:
+            file_path: Path to file being accessed
+        """
+        # Temporarily disable tracking to avoid recursion
+        object.__setattr__(self, '_tracking_enabled', False)
+
+        try:
+            file_path = Path(file_path)
+            files_accessed = object.__getattribute__(self, '_files_accessed_in_current_test')
+            files_loaded = object.__getattribute__(self, 'files_loaded')
+
+            # Convert to string for consistent key format
+            file_path_str = str(file_path)
+
+            # If this file was loaded at session startup, use that metadata
+            if file_path_str in files_loaded:
+                files_accessed[file_path_str] = files_loaded[file_path_str]
+            elif file_path.exists():
+                # File exists but wasn't loaded at session startup - get metadata now
+                stat = file_path.stat()
+                files_accessed[file_path_str] = {
+                    'size': stat.st_size,
+                    'created': stat.st_ctime,
+                    'modified': stat.st_mtime,
+                    'name': file_path.name
+                }
+        finally:
+            # Re-enable tracking
+            object.__setattr__(self, '_tracking_enabled', True)
