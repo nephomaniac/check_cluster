@@ -94,6 +94,8 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
     """
     Load all cluster data from a directory.
 
+    Supports both new structured layout (sources/ocm, sources/aws) and legacy flat layout.
+
     Args:
         data_dir: Directory containing cluster JSON files
 
@@ -108,15 +110,32 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
     if not data_dir.exists() or not data_dir.is_dir():
         raise ValueError(f"Data directory does not exist: {data_dir}")
 
+    # Check if we're using new directory structure
+    sources_ocm = data_dir / "sources" / "ocm"
+    sources_aws = data_dir / "sources" / "aws"
+    use_new_structure = sources_ocm.exists() and sources_aws.exists()
+
+    # Determine where to look for cluster.json
+    if use_new_structure:
+        ocm_dir = sources_ocm
+        aws_dir = sources_aws
+    else:
+        # Legacy flat structure - all files in data_dir
+        ocm_dir = data_dir
+        aws_dir = data_dir
+
     # Find cluster ID from *_cluster.json file
-    cluster_files = list(data_dir.glob('*_cluster.json'))
+    cluster_files = list(ocm_dir.glob('*_cluster.json'))
     if not cluster_files:
-        raise ValueError(f"No cluster file (*_cluster.json) found in {data_dir}")
+        # Fallback to data_dir for legacy structure
+        cluster_files = list(data_dir.glob('*_cluster.json'))
+    if not cluster_files:
+        raise ValueError(f"No cluster file (*_cluster.json) found in {ocm_dir if use_new_structure else data_dir}")
 
     cluster_id = cluster_files[0].stem.replace('_cluster', '')
 
-    # Load core cluster data
-    cluster_json = load_json_file(data_dir / f"{cluster_id}_cluster.json")
+    # Load core cluster data (from OCM directory)
+    cluster_json = load_json_file(ocm_dir / f"{cluster_id}_cluster.json")
     if not cluster_json:
         raise ValueError(f"Failed to load cluster.json for {cluster_id}")
 
@@ -128,7 +147,7 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
     )
 
     # Track the cluster.json file manually
-    cluster_json_path = data_dir / f"{cluster_id}_cluster.json"
+    cluster_json_path = ocm_dir / f"{cluster_id}_cluster.json"
     if cluster_json_path.exists():
         stat = cluster_json_path.stat()
         cluster_data.files_loaded[str(cluster_json_path)] = {
@@ -140,35 +159,36 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
         # Register that cluster_json attribute uses this file
         cluster_data.register_attribute_file('cluster_json', str(cluster_json_path))
 
-    # Load optional files (now with file tracking)
-    sg_path = data_dir / f"{cluster_id}_security_groups.json"
-    cluster_data.security_groups = load_json_file(sg_path, cluster_data) or {}
-    if sg_path.exists():
-        cluster_data.register_attribute_file('security_groups', str(sg_path))
-
-    lb_path = data_dir / f"{cluster_id}_load_balancers_all.json"
-    cluster_data.load_balancers = load_json_file(lb_path, cluster_data) or {}
-    if lb_path.exists():
-        cluster_data.register_attribute_file('load_balancers', str(lb_path))
-
-    vpc_ids_path = data_dir / f"{cluster_id}_VPC_IDS.json"
-    cluster_data.vpcs = load_json_file(vpc_ids_path, cluster_data) or {}
-    if vpc_ids_path.exists():
-        cluster_data.register_attribute_file('vpcs', str(vpc_ids_path))
-
-    context_path = data_dir / f"{cluster_id}_cluster_context.json"
+    # Load optional OCM files
+    context_path = ocm_dir / f"{cluster_id}_cluster_context.json"
     cluster_data.cluster_context = load_json_file(context_path, cluster_data) or {}
     if context_path.exists():
         cluster_data.register_attribute_file('cluster_context', str(context_path))
 
-    resources_path = data_dir / f"{cluster_id}_resources.json"
+    resources_path = ocm_dir / f"{cluster_id}_resources.json"
     cluster_data.resources = load_json_file(resources_path, cluster_data) or {}
     if resources_path.exists():
         cluster_data.register_attribute_file('resources', str(resources_path))
 
+    # Load AWS files (from AWS directory)
+    sg_path = aws_dir / f"{cluster_id}_security_groups.json"
+    cluster_data.security_groups = load_json_file(sg_path, cluster_data) or {}
+    if sg_path.exists():
+        cluster_data.register_attribute_file('security_groups', str(sg_path))
+
+    lb_path = aws_dir / f"{cluster_id}_load_balancers_all.json"
+    cluster_data.load_balancers = load_json_file(lb_path, cluster_data) or {}
+    if lb_path.exists():
+        cluster_data.register_attribute_file('load_balancers', str(lb_path))
+
+    vpc_ids_path = aws_dir / f"{cluster_id}_VPC_IDS.json"
+    cluster_data.vpcs = load_json_file(vpc_ids_path, cluster_data) or {}
+    if vpc_ids_path.exists():
+        cluster_data.register_attribute_file('vpcs', str(vpc_ids_path))
+
     # Load VPC info (look for main VPC file, not attribute files)
     vpc_files = [
-        f for f in data_dir.glob(f"{cluster_id}_vpc-*_VPC.json")
+        f for f in aws_dir.glob(f"{cluster_id}_vpc-*_VPC.json")
         if not f.name.endswith(('_attrDnsHost.json', '_attrDnsSupp.json', '_attrEnableDns.json'))
     ]
     if vpc_files:
@@ -181,21 +201,21 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
                 vpc_id = vpc.get('VpcId')
                 if vpc_id:
                     # Load DNS hostname attribute
-                    dns_host_file = data_dir / f"{cluster_id}_{vpc_id}_VPC_attrDnsHost.json"
+                    dns_host_file = aws_dir / f"{cluster_id}_{vpc_id}_VPC_attrDnsHost.json"
                     dns_host_data = load_json_file(dns_host_file, cluster_data)
                     if dns_host_data and 'EnableDnsHostnames' in dns_host_data:
                         vpc['EnableDnsHostnames'] = dns_host_data['EnableDnsHostnames'].get('Value', False)
                         cluster_data.register_attribute_file('vpcs', str(dns_host_file))
 
                     # Load DNS support attribute
-                    dns_supp_file = data_dir / f"{cluster_id}_{vpc_id}_VPC_attrDnsSupp.json"
+                    dns_supp_file = aws_dir / f"{cluster_id}_{vpc_id}_VPC_attrDnsSupp.json"
                     dns_supp_data = load_json_file(dns_supp_file, cluster_data)
                     if dns_supp_data and 'EnableDnsSupport' in dns_supp_data:
                         vpc['EnableDnsSupport'] = dns_supp_data['EnableDnsSupport'].get('Value', False)
                         cluster_data.register_attribute_file('vpcs', str(dns_supp_file))
 
     # Load EC2 instances
-    instances_file = data_dir / f"{cluster_id}_ec2_instances.json"
+    instances_file = aws_dir / f"{cluster_id}_ec2_instances.json"
     instances_data = load_json_file(instances_file, cluster_data)
     if instances_data:
         cluster_data.register_attribute_file('ec2_instances', str(instances_file))
@@ -216,7 +236,7 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
             cluster_data.ec2_instances = instances_data.get('Instances', [])
 
     # Load CloudTrail events
-    cloudtrail_files = list(data_dir.glob(f"{cluster_id}_*.cloudtrail.json"))
+    cloudtrail_files = list(aws_dir.glob(f"{cluster_id}_*.cloudtrail.json"))
     if cloudtrail_files:
         ct_data = load_json_file(cloudtrail_files[0], cluster_data)
         if ct_data:
@@ -227,7 +247,7 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
                 cluster_data.cloudtrail_events = ct_data.get('Events', [])
 
     # Load Route53 data
-    route53_files = list(data_dir.glob(f"{cluster_id}_hosted_zones.json"))
+    route53_files = list(aws_dir.glob(f"{cluster_id}_hosted_zones.json"))
     if route53_files:
         route53_data = load_json_file(route53_files[0], cluster_data)
         if route53_data:

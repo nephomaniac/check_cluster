@@ -139,10 +139,21 @@ Examples:
         print(f"Error: Not a directory: {args.cluster_dir}", file=sys.stderr)
         return 1
 
+    # Check if using new directory structure
+    results_dir = args.cluster_dir / "results"
+    use_results_dir = results_dir.exists() and results_dir.is_dir()
+
     # Generate timestamped HTML output path if not provided
     if args.html_output is None:
         timestamp = int(time.time())
-        args.html_output = args.cluster_dir / f"test_report_{timestamp}.html"
+        if use_results_dir:
+            args.html_output = results_dir / f"test_report_{timestamp}.html"
+        else:
+            args.html_output = args.cluster_dir / f"test_report_{timestamp}.html"
+
+    # Update JSON output path if not explicitly set and using new structure
+    if use_results_dir and args.json_output == Path('test_results.json'):
+        args.json_output = results_dir / 'test_results.json'
 
     # Run tests
     exit_code = 0

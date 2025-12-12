@@ -1085,8 +1085,25 @@ class ClusterDataCollector:
         self.debug = debug
         self.region_override = region  # CLI-provided region
 
-        self.file_prefix = self.work_dir / cluster_id
-        self.last_run_file = self.work_dir / "last_run.json"
+        # Set up directory structure
+        self._setup_directory_structure()
+
+        # Define file prefixes for different source types
+        self.sources_aws_dir = self.work_dir / "sources" / "aws"
+        self.sources_ocm_dir = self.work_dir / "sources" / "ocm"
+        self.sources_k8s_dir = self.work_dir / "sources" / "k8s"
+        self.sources_metrics_dir = self.work_dir / "sources" / "metrics"
+        self.sources_hosts_dir = self.work_dir / "sources" / "hosts"
+        self.results_dir = self.work_dir / "results"
+
+        # AWS data files will use sources/aws/ prefix
+        self.file_prefix = self.sources_aws_dir / cluster_id
+        # OCM data files will use sources/ocm/ prefix
+        self.ocm_file_prefix = self.sources_ocm_dir / cluster_id
+        # Metrics files will use sources/metrics/ prefix
+        self.metrics_file_prefix = self.sources_metrics_dir / cluster_id
+        # Results files
+        self.last_run_file = self.results_dir / "last_run.json"
 
         # AWS collector will be initialized after cluster data is fetched
         # (to use cluster region if not provided via CLI)
@@ -1104,6 +1121,32 @@ class ClusterDataCollector:
 
         # Track failed requests with empty results
         self.failed_empty_requests = []
+
+    def _setup_directory_structure(self):
+        """
+        Create the directory structure for organizing collected data.
+
+        Directory structure:
+            <work_dir>/
+                sources/
+                    ocm/       - OCM API responses (cluster.json, resources.json, etc.)
+                    aws/       - AWS API responses (EC2, VPC, IAM, etc.)
+                    k8s/       - Kubernetes resources (reserved for future use)
+                    metrics/   - CloudWatch metrics
+                    hosts/     - Console logs and host-specific data
+                results/       - Analysis results, HTML reports, last_run.json
+        """
+        subdirs = [
+            self.work_dir / "sources" / "ocm",
+            self.work_dir / "sources" / "aws",
+            self.work_dir / "sources" / "k8s",
+            self.work_dir / "sources" / "metrics",
+            self.work_dir / "sources" / "hosts",
+            self.work_dir / "results"
+        ]
+
+        for subdir in subdirs:
+            subdir.mkdir(parents=True, exist_ok=True)
 
     def _is_empty_resource_file(self, file_path: Path, resource_keys: List[str]) -> bool:
         """
@@ -1240,7 +1283,7 @@ class ClusterDataCollector:
             Colors.perr("")
 
         # Save failures to a JSON file for reference
-        failures_file = f"{self.file_prefix}_empty_resource_failures.json"
+        failures_file = f"{self.results_dir / self.cluster_id}_empty_resource_failures.json"
         with open(failures_file, 'w') as f:
             json.dump(self.failed_empty_requests, f, indent=2)
         Colors.perr(f"Empty resource failures saved to: {failures_file}")
@@ -1316,7 +1359,7 @@ class ClusterDataCollector:
         """Fetch cluster information from OCM"""
         Colors.hdr("Get OCM Cluster INFO")
 
-        cluster_json = f"{self.file_prefix}_cluster.json"
+        cluster_json = f"{self.ocm_file_prefix}_cluster.json"
 
         if Path(cluster_json).exists():
             Colors.blue(f"Using existing {cluster_json} file for ocm cluster info")
@@ -1371,7 +1414,7 @@ class ClusterDataCollector:
             Colors.blue(f"Single-AZ cluster in zone: {self.availability_zones[0] if self.availability_zones else 'unknown'}")
 
         # Get cluster context
-        cluster_ctx_file = f"{self.file_prefix}_cluster_context.json"
+        cluster_ctx_file = f"{self.ocm_file_prefix}_cluster_context.json"
         if Path(cluster_ctx_file).exists():
             Colors.green(f"Using existing cluster context file: {cluster_ctx_file}")
         else:
@@ -1391,7 +1434,7 @@ class ClusterDataCollector:
                     f.write(result.stdout)
 
         # Get cluster resources
-        cluster_resources = f"{self.file_prefix}_resources.json"
+        cluster_resources = f"{self.ocm_file_prefix}_resources.json"
         if Path(cluster_resources).exists():
             Colors.green(f"Using existing ocm resources file: {cluster_resources}")
         else:
@@ -1492,10 +1535,10 @@ class ClusterDataCollector:
     def _fetch_cloudwatch_metric(self, instance_id: str, metric_name: str, aws_metric_name: str,
                                 namespace: str, statistic: str, description: str) -> Optional[str]:
         """Fetch CloudWatch metric with intelligent file caching"""
-        file_prefix = f"{self.file_prefix}_{instance_id}_{metric_name}_"
+        file_prefix = f"{self.metrics_file_prefix}_{instance_id}_{metric_name}_"
 
         # Look for existing files
-        existing_files = list(self.work_dir.glob(f"{self.cluster_id}_{instance_id}_{metric_name}_*.json"))
+        existing_files = list(self.sources_metrics_dir.glob(f"{self.cluster_id}_{instance_id}_{metric_name}_*.json"))
         existing_file = existing_files[0] if existing_files else None
 
         fetch_start = self.capture_start
@@ -2622,7 +2665,7 @@ class ClusterDataCollector:
 
     def _fetch_instance_console_logs(self, instance_id: str):
         """Fetch EC2 instance console logs"""
-        console_file = f"{self.file_prefix}_{instance_id}_console.log"
+        console_file = f"{self.sources_hosts_dir / self.cluster_id}_{instance_id}_console.log"
 
         print(f"VM: {instance_id}")
         if Path(console_file).exists():
