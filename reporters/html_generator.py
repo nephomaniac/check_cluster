@@ -255,17 +255,38 @@ class HTMLReportGenerator:
             return 'All validations passed'
 
         elif outcome == 'failed':
-            # Look for ✗ failure message
+            # Look for ✗ failure message in stdout
             if stdout:
                 lines = stdout.split('\n')
                 failure_lines = [line for line in lines if line.startswith('✗')]
                 if failure_lines:
                     return failure_lines[0]
+
             # Fallback to longrepr
             longrepr = call_info.get('longrepr', '')
+
+            # Look for AssertionError message
             if 'AssertionError: ' in longrepr:
                 return longrepr.split('AssertionError: ')[-1].split('\n')[0]
-            return longrepr.split('\n')[0] if '\n' in longrepr else longrepr[:200]
+
+            # Look for Failed: message (from pytest.fail())
+            if 'Failed: ' in longrepr:
+                return longrepr.split('Failed: ')[-1].split('\n')[0]
+
+            # Look for E   lines which mark actual error in pytest output
+            lines = longrepr.split('\n')
+            for line in lines:
+                if line.startswith('E   '):
+                    # Extract error message without the E prefix
+                    return line[4:].strip()
+
+            # Last resort: take first non-empty line that doesn't look like code
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('>') and not line.startswith('def ') and '=' not in line[:50]:
+                    return line[:200]
+
+            return longrepr[:200]
 
         elif outcome == 'skipped':
             longrepr = call_info.get('longrepr', 'Skipped')
@@ -280,6 +301,42 @@ class HTMLReportGenerator:
             return str(longrepr)
 
         return 'Unknown status'
+
+    def _generate_stack_trace_html(self, test: Dict[str, Any]) -> str:
+        """Generate stack trace section for failed tests"""
+        from html import escape
+
+        outcome = test.get('outcome', 'unknown')
+        if outcome != 'failed':
+            return ''
+
+        call_info = test.get('call', {})
+        longrepr = call_info.get('longrepr', '')
+
+        if not longrepr or len(longrepr) < 50:
+            return ''
+
+        # Don't show stack trace if we already have a clean ✗ message
+        stdout = call_info.get('stdout', '')
+        if stdout and any(line.startswith('✗') for line in stdout.split('\n')):
+            # Only show stack trace if longrepr has additional useful info
+            if len(longrepr) < 200:
+                return ''
+
+        html = '<div class="detail-section">'
+        html += '<details style="margin: 10px 0;">'
+        html += '<summary style="cursor: pointer; font-weight: bold; color: #e74c3c; padding: 8px; background: #fff5f5; border: 1px solid #f8d7da; border-radius: 4px; user-select: none;">'
+        html += '⚠️ Error Trace'
+        html += '</summary>'
+        html += '<div style="margin-top: 10px; padding: 15px; background: #fff; border: 1px solid #f8d7da; border-radius: 4px;">'
+        html += '<pre style="background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 12px; line-height: 1.5; margin: 0;">'
+        html += f'<code>{escape(longrepr)}</code>'
+        html += '</pre>'
+        html += '</div>'
+        html += '</details>'
+        html += '</div>'
+
+        return html
 
     def _extract_json_output(self, test: Dict[str, Any]) -> List[str]:
         """Extract JSON blocks from test stdout"""
@@ -388,6 +445,9 @@ class HTMLReportGenerator:
             # Escape status reason for safe HTML display
             escaped_status_reason = escape(status_reason)
 
+            # Generate stack trace section for failed tests
+            stack_trace_html = self._generate_stack_trace_html(test)
+
             # Generate sources section
             sources_html = self._generate_sources_html(test)
 
@@ -428,6 +488,7 @@ class HTMLReportGenerator:
                                         <h4>Status Reason</h4>
                                         <div class="status-reason {status_class}">{escaped_status_reason}</div>
                                     </div>
+                                    {stack_trace_html}
                                     {json_output_html}
                                     <div class="detail-section">
                                         <h4>Test Description</h4>
