@@ -169,8 +169,10 @@ def pytest_runtest_makereport(item, call):
         if 'cluster_data' in item.funcargs:
             cluster_data = item.funcargs['cluster_data']
             files_accessed = cluster_data.get_test_files_accessed()
+            files_expected_but_missing = cluster_data.get_test_files_expected_but_missing()
             attrs_no_files = cluster_data.get_test_attributes_with_no_files()
             item.user_properties.append(("files_accessed", files_accessed))
+            item.user_properties.append(("files_expected_but_missing", files_expected_but_missing))
             item.user_properties.append(("attributes_no_files", attrs_no_files))
 
     return outcome

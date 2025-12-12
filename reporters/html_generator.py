@@ -447,7 +447,7 @@ class HTMLReportGenerator:
 
         # Extract file sources from user_properties
         files_accessed = {}
-        attrs_no_files = []
+        files_expected_but_missing = {}
 
         user_properties = test.get('user_properties', [])
         if user_properties and isinstance(user_properties, list):
@@ -455,16 +455,16 @@ class HTMLReportGenerator:
                 if isinstance(prop, dict):
                     if 'files_accessed' in prop:
                         files_accessed = prop['files_accessed']
-                    elif 'attributes_no_files' in prop:
-                        attrs_no_files = prop['attributes_no_files']
+                    elif 'files_expected_but_missing' in prop:
+                        files_expected_but_missing = prop['files_expected_but_missing']
 
-        if not files_accessed and not attrs_no_files:
+        if not files_accessed and not files_expected_but_missing:
             return ''
 
         html = '<div class="detail-section sources-section">'
         html += '<details style="margin: 10px 0;">'
         html += '<summary style="cursor: pointer; font-weight: bold; color: #2c3e50; padding: 8px; background: #ecf0f1; border-radius: 4px; user-select: none;">'
-        html += '📁 Sources'
+        html += '📁 Source files used to determine test status'
         html += '</summary>'
         html += '<div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">'
 
@@ -508,26 +508,13 @@ class HTMLReportGenerator:
             html += '</tbody>'
             html += '</table>'
 
-        # Show attributes that were accessed but have no files
-        if attrs_no_files:
-            # Map attribute names to expected file patterns
-            attr_to_expected_files = {
-                'cloudtrail_events': '*_*.cloudtrail.json',
-                'resources': '*_resources.json',
-                'security_groups': '*_security_groups.json',
-                'load_balancers': '*_load_balancers_all.json',
-                'ec2_instances': '*_ec2_instances.json',
-                'vpcs': '*_vpc-*_VPC.json or *_VPC_IDS.json',
-                'route53_zones': '*_hosted_zones.json',
-                'cluster_context': '*_cluster_context.json',
-            }
-
+        # Show files that were expected but not found (directly checked by test)
+        if files_expected_but_missing:
             html += '<div style="margin-top: 10px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">'
             html += '<strong style="color: #856404;">⚠ Expected Files Not Found:</strong>'
             html += '<ul style="margin: 5px 0; padding-left: 20px;">'
-            for attr in attrs_no_files:
-                expected_pattern = attr_to_expected_files.get(attr, f'*_{attr}.json')
-                html += f'<li style="font-family: monospace; font-size: 0.85em; color: #856404;">Expected: {escape(expected_pattern)} (for {attr})</li>'
+            for file_path, file_name in sorted(files_expected_but_missing.items()):
+                html += f'<li style="font-family: monospace; font-size: 0.85em; color: #856404;" title="{escape(file_path)}">{escape(file_name)}</li>'
             html += '</ul>'
             html += '</div>'
 

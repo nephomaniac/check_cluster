@@ -38,6 +38,7 @@ class ClusterData:
 
     # Per-test file access tracking
     _files_accessed_in_current_test: Dict[str, Dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    _files_expected_but_missing: Dict[str, str] = field(default_factory=dict, init=False, repr=False)  # path -> filename
     _attributes_accessed_with_no_files: List[str] = field(default_factory=list, init=False, repr=False)
     _attribute_to_files: Dict[str, List[str]] = field(default_factory=dict, init=False, repr=False)
     _tracking_enabled: bool = field(default=True, init=False, repr=False)
@@ -189,6 +190,7 @@ class ClusterData:
     def reset_test_file_tracking(self) -> None:
         """Reset per-test file access tracking (called at start of each test)"""
         self._files_accessed_in_current_test = {}
+        self._files_expected_but_missing = {}
         self._attributes_accessed_with_no_files = []
 
     def get_test_files_accessed(self) -> Dict[str, Dict[str, Any]]:
@@ -199,7 +201,11 @@ class ClusterData:
         """Get attributes that were accessed but have no registered files"""
         return self._attributes_accessed_with_no_files.copy()
 
-    def _track_direct_file_access(self, file_path: Path) -> None:
+    def get_test_files_expected_but_missing(self) -> Dict[str, str]:
+        """Get files that were expected (checked) but don't exist"""
+        return self._files_expected_but_missing.copy()
+
+    def _track_direct_file_access(self, file_path: Path, exists: bool = True) -> None:
         """
         Track direct file access (files opened/checked outside of ClusterData attributes).
 
@@ -211,6 +217,7 @@ class ClusterData:
 
         Args:
             file_path: Path to file being accessed
+            exists: Whether the file exists (False when checked but not found)
         """
         # Temporarily disable tracking to avoid recursion
         object.__setattr__(self, '_tracking_enabled', False)
@@ -218,23 +225,29 @@ class ClusterData:
         try:
             file_path = Path(file_path)
             files_accessed = object.__getattribute__(self, '_files_accessed_in_current_test')
+            files_missing = object.__getattribute__(self, '_files_expected_but_missing')
             files_loaded = object.__getattribute__(self, 'files_loaded')
 
             # Convert to string for consistent key format
             file_path_str = str(file_path)
 
-            # If this file was loaded at session startup, use that metadata
-            if file_path_str in files_loaded:
-                files_accessed[file_path_str] = files_loaded[file_path_str]
-            elif file_path.exists():
-                # File exists but wasn't loaded at session startup - get metadata now
-                stat = file_path.stat()
-                files_accessed[file_path_str] = {
-                    'size': stat.st_size,
-                    'created': stat.st_ctime,
-                    'modified': stat.st_mtime,
-                    'name': file_path.name
-                }
+            if exists:
+                # File exists - track it with metadata
+                # If this file was loaded at session startup, use that metadata
+                if file_path_str in files_loaded:
+                    files_accessed[file_path_str] = files_loaded[file_path_str]
+                elif file_path.exists():
+                    # File exists but wasn't loaded at session startup - get metadata now
+                    stat = file_path.stat()
+                    files_accessed[file_path_str] = {
+                        'size': stat.st_size,
+                        'created': stat.st_ctime,
+                        'modified': stat.st_mtime,
+                        'name': file_path.name
+                    }
+            else:
+                # File was checked but doesn't exist - track as expected but missing
+                files_missing[file_path_str] = file_path.name
         finally:
             # Re-enable tracking
             object.__setattr__(self, '_tracking_enabled', True)

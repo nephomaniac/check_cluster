@@ -82,16 +82,15 @@ class TrackedPath:
             True if file exists, False otherwise
         """
         result = self._path.exists()
-        if result:
-            # File exists, track it
-            self._cluster_data._track_direct_file_access(self._path)
+        # Track both existing and missing files
+        self._cluster_data._track_direct_file_access(self._path, exists=result)
         return result
 
     def is_file(self) -> bool:
         """Check if path is a file."""
         result = self._path.is_file()
         if result:
-            self._cluster_data._track_direct_file_access(self._path)
+            self._cluster_data._track_direct_file_access(self._path, exists=True)
         return result
 
     def is_dir(self) -> bool:
@@ -111,7 +110,7 @@ class TrackedPath:
         for path in self._path.glob(pattern):
             # Track each file found by glob
             if path.is_file():
-                self._cluster_data._track_direct_file_access(path)
+                self._cluster_data._track_direct_file_access(path, exists=True)
             # Yield as TrackedPath to maintain tracking chain
             yield TrackedPath(path, self._cluster_data)
 
@@ -128,7 +127,7 @@ class TrackedPath:
         """
         # Track file access when opened
         if 'r' in mode and self._path.exists():
-            self._cluster_data._track_direct_file_access(self._path)
+            self._cluster_data._track_direct_file_access(self._path, exists=True)
 
         # Return the actual file object
         return self._path.open(mode, **kwargs)
@@ -136,13 +135,13 @@ class TrackedPath:
     def read_text(self, **kwargs) -> str:
         """Read file as text and track access."""
         if self._path.exists():
-            self._cluster_data._track_direct_file_access(self._path)
+            self._cluster_data._track_direct_file_access(self._path, exists=True)
         return self._path.read_text(**kwargs)
 
     def read_bytes(self) -> bytes:
         """Read file as bytes and track access."""
         if self._path.exists():
-            self._cluster_data._track_direct_file_access(self._path)
+            self._cluster_data._track_direct_file_access(self._path, exists=True)
         return self._path.read_bytes()
 
     def resolve(self) -> 'TrackedPath':
