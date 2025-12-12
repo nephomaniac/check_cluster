@@ -826,6 +826,28 @@ class HTMLReportGenerator:
         .test-table {
             width: 100%;
             border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        /* Set fixed column widths to prevent table expansion */
+        .test-table th:nth-child(1),
+        .test-table td:nth-child(1) {
+            width: 30%;
+        }
+
+        .test-table th:nth-child(2),
+        .test-table td:nth-child(2) {
+            width: 15%;
+        }
+
+        .test-table th:nth-child(3),
+        .test-table td:nth-child(3) {
+            width: 15%;
+        }
+
+        .test-table th:nth-child(4),
+        .test-table td:nth-child(4) {
+            width: 40%;
         }
 
         .test-table thead {
@@ -940,6 +962,9 @@ class HTMLReportGenerator:
             border-left: 4px solid #007bff;
             max-height: 800px;
             overflow-y: auto;
+            max-width: 100%;
+            overflow-x: auto;
+            box-sizing: border-box;
         }
 
         .detail-section {
@@ -954,6 +979,10 @@ class HTMLReportGenerator:
         .detail-section pre {
             max-height: 400px;
             overflow-y: auto;
+            overflow-x: auto;
+            max-width: 100%;
+            word-wrap: normal;
+            white-space: pre;
         }
 
         .detail-section h4 {
@@ -1072,8 +1101,11 @@ class HTMLReportGenerator:
             padding: 15px;
             margin: 10px 0;
             max-height: 400px;
+            max-width: 100%;
             overflow-y: auto;
             overflow-x: auto;
+            word-wrap: normal;
+            white-space: pre;
         }
 
         .json-output code {
