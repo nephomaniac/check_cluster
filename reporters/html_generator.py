@@ -1127,15 +1127,5 @@ class HTMLReportGenerator:
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // All categories start expanded, no action needed
-
-            // Prevent clicks inside test details from bubbling to toggle button
-            document.querySelectorAll('.test-details-content').forEach(function(content) {
-                content.addEventListener('click', function(e) {
-                    // Stop propagation for interactive elements like <details>
-                    if (e.target.tagName === 'SUMMARY' || e.target.closest('details')) {
-                        e.stopPropagation();
-                    }
-                });
-            });
         });
     </script>"""
