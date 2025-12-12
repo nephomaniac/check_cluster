@@ -13,7 +13,7 @@ from models.cluster import ClusterData
 @pytest.mark.instances
 def test_iam_instance_profiles_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster should have IAM instance profiles for EC2 instances"""
-    iam_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
+    iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
         pytest.skip(f"IAM instance profiles file not found: {iam_file}")
@@ -43,7 +43,7 @@ def test_iam_instance_profiles_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.instances
 def test_master_iam_instance_profile_exists(cluster_data: ClusterData, infra_id: str):
     """Cluster should have IAM instance profile for master/control plane nodes"""
-    iam_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
+    iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
         pytest.skip(f"IAM instance profiles file not found: {iam_file}")
@@ -79,7 +79,7 @@ def test_master_iam_instance_profile_exists(cluster_data: ClusterData, infra_id:
 @pytest.mark.instances
 def test_worker_iam_instance_profile_exists(cluster_data: ClusterData, infra_id: str):
     """Cluster should have IAM instance profile for worker nodes"""
-    iam_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
+    iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
         pytest.skip(f"IAM instance profiles file not found: {iam_file}")
@@ -114,7 +114,7 @@ def test_worker_iam_instance_profile_exists(cluster_data: ClusterData, infra_id:
 @pytest.mark.instances
 def test_iam_profiles_have_roles(cluster_data: ClusterData, infra_id: str):
     """IAM instance profiles should have roles attached"""
-    iam_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
+    iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
         pytest.skip(f"IAM instance profiles file not found: {iam_file}")
@@ -163,7 +163,7 @@ def test_iam_profiles_have_roles(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.instances
 def test_iam_profiles_have_valid_arns(cluster_data: ClusterData, infra_id: str):
     """IAM instance profiles should have valid ARNs"""
-    iam_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
+    iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
         pytest.skip(f"IAM instance profiles file not found: {iam_file}")

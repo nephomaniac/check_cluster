@@ -28,7 +28,7 @@ def byo_subnet_files(cluster_data: ClusterData, byo_subnet_ids):
     """Load individual subnet files for BYO VPC subnets."""
     subnet_files = {}
     for subnet_id in byo_subnet_ids:
-        subnet_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_{subnet_id}.json"
+        subnet_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_{subnet_id}.json"
         if subnet_file.exists():
             with open(subnet_file) as f:
                 subnet_files[subnet_id] = json.load(f)
@@ -70,7 +70,7 @@ def test_byo_vpc_all_subnets_fetched(cluster_data: ClusterData, byo_subnet_ids):
     missing_subnets = []
 
     for subnet_id in byo_subnet_ids:
-        subnet_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_{subnet_id}.json"
+        subnet_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_{subnet_id}.json"
         if not subnet_file.exists():
             missing_subnets.append(subnet_id)
 
@@ -216,7 +216,7 @@ def test_byo_vpc_has_correct_tags(cluster_data: ClusterData, byo_subnet_ids, byo
         pytest.skip("VPC ID not found in subnet data")
 
     # Load VPC file
-    vpc_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_{vpc_id}_VPC.json"
+    vpc_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_{vpc_id}_VPC.json"
     if not vpc_file.exists():
         pytest.skip(f"VPC file not found: {vpc_file.name}")
 
@@ -292,7 +292,7 @@ def test_byo_vpc_subnet_cidr_within_vpc_cidr(cluster_data: ClusterData, byo_subn
     vpc_id = subnets[0].get('VpcId')
 
     # Load VPC file
-    vpc_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_{vpc_id}_VPC.json"
+    vpc_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_{vpc_id}_VPC.json"
     if not vpc_file.exists():
         pytest.skip(f"VPC file not found")
 

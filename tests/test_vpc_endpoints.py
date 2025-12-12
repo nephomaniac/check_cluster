@@ -14,7 +14,7 @@ from models.cluster import ClusterData
 @pytest.mark.network
 def test_vpc_endpoints_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster may have VPC endpoints for AWS services"""
-    endpoints_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
+    endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
         pytest.skip(f"VPC endpoints file not found: {endpoints_file}")
@@ -35,7 +35,7 @@ def test_vpc_endpoints_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_vpc_endpoints_available_state(cluster_data: ClusterData, infra_id: str):
     """VPC endpoints should be in 'available' state"""
-    endpoints_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
+    endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
         pytest.skip(f"VPC endpoints file not found: {endpoints_file}")
@@ -63,7 +63,7 @@ def test_vpc_endpoints_available_state(cluster_data: ClusterData, infra_id: str)
 @pytest.mark.network
 def test_vpc_endpoints_have_service_name(cluster_data: ClusterData, infra_id: str):
     """VPC endpoints should have service name configured"""
-    endpoints_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
+    endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
         pytest.skip(f"VPC endpoints file not found: {endpoints_file}")
@@ -91,7 +91,7 @@ def test_vpc_endpoints_have_service_name(cluster_data: ClusterData, infra_id: st
 @pytest.mark.network
 def test_interface_endpoints_have_security_groups(cluster_data: ClusterData, infra_id: str):
     """Interface VPC endpoints should have security groups attached"""
-    endpoints_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
+    endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
         pytest.skip(f"VPC endpoints file not found: {endpoints_file}")
@@ -128,7 +128,7 @@ def test_interface_endpoints_have_security_groups(cluster_data: ClusterData, inf
 @pytest.mark.network
 def test_interface_endpoints_have_subnets(cluster_data: ClusterData, infra_id: str):
     """Interface VPC endpoints should be deployed in subnets"""
-    endpoints_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
+    endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
         pytest.skip(f"VPC endpoints file not found: {endpoints_file}")
@@ -165,7 +165,7 @@ def test_interface_endpoints_have_subnets(cluster_data: ClusterData, infra_id: s
 @pytest.mark.network
 def test_s3_gateway_endpoint_exists(cluster_data: ClusterData, infra_id: str):
     """Check if S3 gateway endpoint exists (common for private clusters)"""
-    endpoints_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
+    endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
         pytest.skip(f"VPC endpoints file not found: {endpoints_file}")

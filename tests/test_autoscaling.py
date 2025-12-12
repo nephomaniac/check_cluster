@@ -14,7 +14,7 @@ from models.cluster import ClusterData
 @pytest.mark.instances
 def test_autoscaling_groups_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster should have Auto Scaling Groups for worker nodes"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")
@@ -35,7 +35,7 @@ def test_autoscaling_groups_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.instances
 def test_asgs_have_desired_capacity(cluster_data: ClusterData, infra_id: str):
     """Auto Scaling Groups should have desired capacity set"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")
@@ -63,7 +63,7 @@ def test_asgs_have_desired_capacity(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.instances
 def test_asgs_have_min_max_capacity(cluster_data: ClusterData, infra_id: str):
     """Auto Scaling Groups should have min and max capacity configured"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")
@@ -98,7 +98,7 @@ def test_asgs_have_min_max_capacity(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.instances
 def test_asgs_have_health_check_configured(cluster_data: ClusterData, infra_id: str):
     """Auto Scaling Groups should have health checks configured"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")
@@ -126,7 +126,7 @@ def test_asgs_have_health_check_configured(cluster_data: ClusterData, infra_id: 
 @pytest.mark.instances
 def test_asgs_in_multiple_azs(cluster_data: ClusterData, infra_id: str):
     """Auto Scaling Groups should span multiple AZs for HA (multi-AZ clusters)"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")
@@ -160,7 +160,7 @@ def test_asgs_in_multiple_azs(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.instances
 def test_asgs_have_launch_template_or_config(cluster_data: ClusterData, infra_id: str):
     """Auto Scaling Groups should have launch template or launch configuration"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")
@@ -189,7 +189,7 @@ def test_asgs_have_launch_template_or_config(cluster_data: ClusterData, infra_id
 @pytest.mark.instances
 def test_asgs_have_tags(cluster_data: ClusterData, infra_id: str):
     """Auto Scaling Groups should have tags for identification"""
-    asg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
+    asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
         pytest.skip(f"Auto Scaling Groups file not found: {asg_file}")

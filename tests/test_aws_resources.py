@@ -81,7 +81,7 @@ def test_installer_role_fetched(cluster_data: ClusterData, sts_config):
     role_name = role_arn.split('/')[-1]
 
     # Check for role file
-    role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}.json"
+    role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}.json"
 
     if role_file.exists():
         print(f"\n✓ Installer role found:")
@@ -120,7 +120,7 @@ def test_support_role_fetched(cluster_data: ClusterData, sts_config):
         pytest.skip("No support role ARN in cluster.json")
 
     role_name = role_arn.split('/')[-1]
-    role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_support_{role_name}.json"
+    role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_support_{role_name}.json"
 
     if role_file.exists():
         print(f"\n✓ Support role found:")
@@ -161,7 +161,7 @@ def test_master_instance_role_fetched(cluster_data: ClusterData, sts_config):
         pytest.skip("No master instance role ARN in cluster.json")
 
     role_name = role_arn.split('/')[-1]
-    role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_master_{role_name}.json"
+    role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_master_{role_name}.json"
 
     if role_file.exists():
         print(f"\n✓ Master instance role found:")
@@ -202,7 +202,7 @@ def test_worker_instance_role_fetched(cluster_data: ClusterData, sts_config):
         pytest.skip("No worker instance role ARN in cluster.json")
 
     role_name = role_arn.split('/')[-1]
-    role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_worker_{role_name}.json"
+    role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_worker_{role_name}.json"
 
     if role_file.exists():
         print(f"\n✓ Worker instance role found:")
@@ -255,7 +255,7 @@ def test_all_operator_roles_fetched(cluster_data: ClusterData, sts_config):
 
         role_name = role_arn.split('/')[-1]
         safe_role_type = f"operator-{namespace}-{name}".replace('/', '-').replace(':', '-')
-        role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_{safe_role_type}_{role_name}.json"
+        role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_{safe_role_type}_{role_name}.json"
 
         if role_file.exists():
             found_roles.append({
@@ -296,8 +296,8 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData, sts_config):
     role_arn = sts_config.get('role_arn')
     if role_arn:
         role_name = role_arn.split('/')[-1]
-        policies_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}_policies.json"
-        attached_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}_attached_policies.json"
+        policies_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}_policies.json"
+        attached_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}_attached_policies.json"
 
         # At least one policy file should exist (inline or attached)
         has_policies = policies_file.exists() or attached_file.exists()
@@ -347,11 +347,11 @@ def test_oidc_provider_fetched(cluster_data: ClusterData, sts_config):
         pytest.skip("No OIDC endpoint URL in cluster.json")
 
     # OIDC provider files should exist
-    oidc_list_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_oidc_providers_list.json"
+    oidc_list_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_oidc_providers_list.json"
 
     # Check for specific OIDC provider file (filename contains sanitized ARN)
     # We'll look for any file matching the pattern
-    oidc_files = list(cluster_data.data_dir.glob(f"{cluster_data.cluster_id}_oidc_provider_*.json"))
+    oidc_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_oidc_provider_*.json"))
 
     # Exclude the list file
     oidc_files = [f for f in oidc_files if not f.name.endswith('_oidc_providers_list.json')]
@@ -398,7 +398,7 @@ def test_iam_role_files_contain_valid_data(cluster_data: ClusterData, sts_config
         pytest.skip("No installer role ARN in cluster.json")
 
     role_name = role_arn.split('/')[-1]
-    role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}.json"
+    role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_installer_{role_name}.json"
 
     if not role_file.exists():
         pytest.skip(f"Role file not found: {role_file.name}")
@@ -447,7 +447,7 @@ def test_audit_log_role_fetched_if_configured(cluster_data: ClusterData, aws_con
         pytest.skip("No audit log role configured")
 
     role_name = role_arn.split('/')[-1]
-    role_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_iam_role_audit-log_{role_name}.json"
+    role_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_role_audit-log_{role_name}.json"
 
     if role_file.exists():
         print(f"\n✓ Audit log role found:")

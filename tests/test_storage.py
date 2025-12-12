@@ -17,7 +17,7 @@ from models.cluster import ClusterData
 @pytest.mark.storage
 def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster should have EBS volumes for instances"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -52,7 +52,7 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.storage
 def test_ebs_volumes_in_use_or_available(cluster_data: ClusterData, infra_id: str):
     """EBS volumes should be in 'in-use' or 'available' state"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -92,7 +92,7 @@ def test_ebs_volumes_in_use_or_available(cluster_data: ClusterData, infra_id: st
 @pytest.mark.storage
 def test_ebs_volumes_encrypted(cluster_data: ClusterData, infra_id: str):
     """EBS volumes should be encrypted for security compliance"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -139,8 +139,8 @@ def test_ebs_volumes_encrypted(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.storage
 def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str):
     """Control plane (master) nodes should have dedicated etcd volumes"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
-    instances_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    instances_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -263,7 +263,7 @@ def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str
 @pytest.mark.storage
 def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str):
     """Volume attachments should be in 'attached' state"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -314,7 +314,7 @@ def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.storage
 def test_volume_types_are_supported(cluster_data: ClusterData, infra_id: str):
     """EBS volumes should use supported volume types (gp2, gp3, io1, io2)"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -357,8 +357,8 @@ def test_volume_types_are_supported(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.storage
 def test_volumes_in_correct_availability_zone(cluster_data: ClusterData, infra_id: str):
     """EBS volumes should be in the same AZ as their attached instances"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
-    instances_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    instances_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")
@@ -512,7 +512,7 @@ def test_volumes_in_correct_availability_zone(cluster_data: ClusterData, infra_i
 @pytest.mark.storage
 def test_no_volumes_in_deleting_state(cluster_data: ClusterData, infra_id: str):
     """No EBS volumes should be stuck in 'deleting' state"""
-    volumes_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
+    volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
         pytest.skip(f"EBS volumes file not found: {volumes_file}")

@@ -44,6 +44,38 @@ class ClusterData:
     _tracking_enabled: bool = field(default=True, init=False, repr=False)
 
     @property
+    def aws_dir(self) -> Path:
+        """
+        Get directory containing AWS data files.
+
+        Returns sources/aws/ if new directory structure exists, otherwise data_dir.
+        """
+        # Import here to avoid circular dependency
+        from utils.tracked_path import TrackedPath
+
+        sources_aws = Path(self.data_dir) / "sources" / "aws"
+        if sources_aws.exists() and sources_aws.is_dir():
+            return TrackedPath(sources_aws, self)
+        # Legacy flat structure - AWS files in data_dir
+        return TrackedPath(self.data_dir, self)
+
+    @property
+    def ocm_dir(self) -> Path:
+        """
+        Get directory containing OCM data files.
+
+        Returns sources/ocm/ if new directory structure exists, otherwise data_dir.
+        """
+        # Import here to avoid circular dependency
+        from utils.tracked_path import TrackedPath
+
+        sources_ocm = Path(self.data_dir) / "sources" / "ocm"
+        if sources_ocm.exists() and sources_ocm.is_dir():
+            return TrackedPath(sources_ocm, self)
+        # Legacy flat structure - OCM files in data_dir
+        return TrackedPath(self.data_dir, self)
+
+    @property
     def infra_id(self) -> str:
         """Get infrastructure ID"""
         return self.cluster_json.get('infra_id', self.cluster_id.split('_')[0])

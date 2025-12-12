@@ -22,7 +22,7 @@ from models.cluster import ClusterData
 @pytest.mark.network
 def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster should have at least one subnet"""
-    subnets_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_subnets.json"
+    subnets_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_subnets.json"
 
     if not subnets_file.exists():
         pytest.skip(f"Subnets file not found: {subnets_file}")
@@ -47,7 +47,7 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_subnets_in_available_state(cluster_data: ClusterData, infra_id: str):
     """All cluster subnets should be in 'available' state"""
-    subnets_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_subnets.json"
+    subnets_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_subnets.json"
 
     if not subnets_file.exists():
         pytest.skip(f"Subnets file not found: {subnets_file}")
@@ -86,7 +86,7 @@ def test_subnets_in_available_state(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_public_and_private_subnets(cluster_data: ClusterData, infra_id: str):
     """Cluster should have both public and private subnets"""
-    subnets_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_subnets.json"
+    subnets_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_subnets.json"
 
     if not subnets_file.exists():
         pytest.skip(f"Subnets file not found: {subnets_file}")
@@ -128,7 +128,7 @@ def test_public_and_private_subnets(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_subnet_kubernetes_role_tags(cluster_data: ClusterData, infra_id: str):
     """Public subnets should have kubernetes.io/role/elb tag, private should have kubernetes.io/role/internal-elb"""
-    subnets_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_subnets.json"
+    subnets_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_subnets.json"
 
     if not subnets_file.exists():
         pytest.skip(f"Subnets file not found: {subnets_file}")
@@ -185,7 +185,7 @@ def test_internet_gateway_exists(cluster_data: ClusterData, infra_id: str, is_pr
     if is_private_cluster:
         pytest.skip("Private clusters do not require internet gateway for public access")
 
-    igw_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_internet_gateways.json"
+    igw_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_internet_gateways.json"
 
     if not igw_file.exists():
         pytest.skip(f"Internet gateway file not found: {igw_file}")
@@ -220,7 +220,7 @@ def test_internet_gateway_attached(cluster_data: ClusterData, infra_id: str, is_
     if is_private_cluster:
         pytest.skip("Private clusters do not require internet gateway")
 
-    igw_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_internet_gateways.json"
+    igw_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_internet_gateways.json"
 
     if not igw_file.exists():
         pytest.skip(f"Internet gateway file not found: {igw_file}")
@@ -276,7 +276,7 @@ def test_internet_gateway_attached(cluster_data: ClusterData, infra_id: str, is_
 @pytest.mark.network
 def test_nat_gateway_exists(cluster_data: ClusterData, infra_id: str):
     """Cluster should have at least one NAT Gateway for private subnet egress"""
-    nat_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
+    nat_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
 
     if not nat_file.exists():
         pytest.skip(f"NAT gateway file not found: {nat_file}")
@@ -309,7 +309,7 @@ def test_nat_gateway_exists(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_nat_gateway_available(cluster_data: ClusterData, infra_id: str):
     """NAT Gateways should be in 'available' state"""
-    nat_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
+    nat_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
 
     if not nat_file.exists():
         pytest.skip(f"NAT gateway file not found: {nat_file}")
@@ -349,7 +349,7 @@ def test_nat_gateway_available(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_nat_gateway_has_public_ip(cluster_data: ClusterData, infra_id: str):
     """NAT Gateways should have public IP addresses assigned"""
-    nat_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
+    nat_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
 
     if not nat_file.exists():
         pytest.skip(f"NAT gateway file not found: {nat_file}")
@@ -408,7 +408,7 @@ def test_nat_gateway_has_public_ip(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_elastic_ips_for_nat(cluster_data: ClusterData, infra_id: str):
     """Elastic IPs should be allocated for NAT gateways"""
-    eip_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_elastic_ips.json"
+    eip_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_elastic_ips.json"
 
     if not eip_file.exists():
         pytest.skip(f"Elastic IPs file not found: {eip_file}")
@@ -443,7 +443,7 @@ def test_elastic_ips_for_nat(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_route_tables_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster should have route tables configured"""
-    rt_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_route_tables.json"
+    rt_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_route_tables.json"
 
     if not rt_file.exists():
         pytest.skip(f"Route tables file not found: {rt_file}")
@@ -480,7 +480,7 @@ def test_public_route_to_internet_gateway(cluster_data: ClusterData, infra_id: s
     if is_private_cluster:
         pytest.skip("Private clusters do not require IGW routes")
 
-    rt_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_route_tables.json"
+    rt_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_route_tables.json"
 
     if not rt_file.exists():
         pytest.skip(f"Route tables file not found: {rt_file}")
@@ -535,7 +535,7 @@ def test_public_route_to_internet_gateway(cluster_data: ClusterData, infra_id: s
 @pytest.mark.network
 def test_private_route_to_nat_gateway(cluster_data: ClusterData, infra_id: str):
     """Private subnets should have route to NAT gateway (0.0.0.0/0)"""
-    rt_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_route_tables.json"
+    rt_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_route_tables.json"
 
     if not rt_file.exists():
         pytest.skip(f"Route tables file not found: {rt_file}")
@@ -590,7 +590,7 @@ def test_private_route_to_nat_gateway(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_network_acls_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster VPC should have Network ACLs configured (informational check)"""
-    nacl_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_network_acls.json"
+    nacl_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_network_acls.json"
 
     if not nacl_file.exists():
         pytest.skip(f"Network ACLs file not found: {nacl_file}")
@@ -609,7 +609,7 @@ def test_network_acls_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.network
 def test_vpc_flow_logs_configured(cluster_data: ClusterData, infra_id: str):
     """Check if VPC Flow Logs are configured (optional but recommended)"""
-    flow_logs_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_vpc_flow_logs.json"
+    flow_logs_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_flow_logs.json"
 
     if not flow_logs_file.exists():
         pytest.skip(f"VPC Flow Logs file not found: {flow_logs_file}")

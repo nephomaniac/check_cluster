@@ -292,7 +292,7 @@ def test_api_load_balancer_has_dns_name(cluster_data: ClusterData):
 @pytest.mark.load_balancers
 def test_target_groups_exist(cluster_data: ClusterData, infra_id: str):
     """Cluster should have target groups for load balancers"""
-    tg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_target_groups.json"
+    tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
         pytest.skip(f"Target groups file not found: {tg_file}")
@@ -309,7 +309,7 @@ def test_target_groups_exist(cluster_data: ClusterData, infra_id: str):
     # Also check VPC ID match (may not have infra_id in name for all TGs)
     if len(cluster_tgs) == 0:
         # Try to match by VPC
-        vpc_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_VPC_IDS.json"
+        vpc_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_VPC_IDS.json"
         if vpc_file.exists():
             with open(vpc_file) as f:
                 vpc_ids = json.load(f)
@@ -334,7 +334,7 @@ def test_target_groups_exist(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.load_balancers
 def test_api_target_group_exists(cluster_data: ClusterData, infra_id: str):
     """API load balancer should have target group on port 6443"""
-    tg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_target_groups.json"
+    tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
         pytest.skip(f"Target groups file not found: {tg_file}")
@@ -369,7 +369,7 @@ def test_api_target_group_exists(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.load_balancers
 def test_mcs_target_group_exists(cluster_data: ClusterData, infra_id: str):
     """Cluster should have target group for Machine Config Server (port 22623)"""
-    tg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_target_groups.json"
+    tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
         pytest.skip(f"Target groups file not found: {tg_file}")
@@ -402,7 +402,7 @@ def test_mcs_target_group_exists(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.load_balancers
 def test_target_groups_have_health_checks(cluster_data: ClusterData, infra_id: str):
     """All target groups should have health checks enabled"""
-    tg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_target_groups.json"
+    tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
         pytest.skip(f"Target groups file not found: {tg_file}")
@@ -413,7 +413,7 @@ def test_target_groups_have_health_checks(cluster_data: ClusterData, infra_id: s
     target_groups = tg_data.get('TargetGroups', [])
 
     # Filter to cluster target groups
-    vpc_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_VPC_IDS.json"
+    vpc_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_VPC_IDS.json"
     vpc_ids = []
     if vpc_file.exists():
         with open(vpc_file) as f:
@@ -447,7 +447,7 @@ def test_target_groups_have_health_checks(cluster_data: ClusterData, infra_id: s
 @pytest.mark.load_balancers
 def test_api_target_group_health_check_path(cluster_data: ClusterData, infra_id: str):
     """API target group should use /readyz health check path"""
-    tg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_target_groups.json"
+    tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
         pytest.skip(f"Target groups file not found: {tg_file}")
@@ -486,7 +486,7 @@ def test_api_target_group_health_check_path(cluster_data: ClusterData, infra_id:
 @pytest.mark.load_balancers
 def test_mcs_target_group_health_check_path(cluster_data: ClusterData, infra_id: str):
     """MCS target group should use /healthz health check path"""
-    tg_file = cluster_data.data_dir / f"{cluster_data.cluster_id}_target_groups.json"
+    tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
         pytest.skip(f"Target groups file not found: {tg_file}")
@@ -524,7 +524,7 @@ def test_mcs_target_group_health_check_path(cluster_data: ClusterData, infra_id:
 def test_target_health_no_unhealthy_targets(cluster_data: ClusterData, infra_id: str):
     """Target groups should not have unhealthy targets (best effort check)"""
     # Look for target health files
-    target_health_files = list(cluster_data.data_dir.glob(f"{cluster_data.cluster_id}_*_target_health.json"))
+    target_health_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_target_health.json"))
 
     if len(target_health_files) == 0:
         pytest.skip("No target health files found")
@@ -576,7 +576,7 @@ def test_target_health_no_unhealthy_targets(cluster_data: ClusterData, infra_id:
 def test_target_groups_have_targets_registered(cluster_data: ClusterData, infra_id: str):
     """Target groups should have targets registered"""
     # Look for target health files
-    target_health_files = list(cluster_data.data_dir.glob(f"{cluster_data.cluster_id}_*_target_health.json"))
+    target_health_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_target_health.json"))
 
     if len(target_health_files) == 0:
         pytest.skip("No target health files found")
@@ -621,7 +621,7 @@ def test_target_groups_have_targets_registered(cluster_data: ClusterData, infra_
 def test_nlb_listeners_exist(cluster_data: ClusterData, infra_id: str):
     """Network Load Balancers should have listeners configured"""
     # Look for listener files
-    listener_files = list(cluster_data.data_dir.glob(f"{cluster_data.cluster_id}_*_listeners.json"))
+    listener_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_listeners.json"))
 
     if len(listener_files) == 0:
         pytest.skip("No listener files found")
@@ -664,7 +664,7 @@ def test_api_nlb_listener_port_6443(cluster_data: ClusterData, infra_id: str):
     """API NLB should have listener on port 6443"""
     # Look for API load balancer listener file
     api_lb_pattern = f"{cluster_data.cluster_id}_*ext*_listeners.json"
-    listener_files = list(cluster_data.data_dir.glob(api_lb_pattern))
+    listener_files = list(cluster_data.aws_dir.glob(api_lb_pattern))
 
     if len(listener_files) == 0:
         pytest.skip("No API load balancer listener files found")
@@ -698,7 +698,7 @@ def test_api_nlb_listener_port_22623(cluster_data: ClusterData, infra_id: str):
     """API NLB should have listener on port 22623 (MCS)"""
     # Look for internal load balancer listener file (has MCS)
     int_lb_pattern = f"{cluster_data.cluster_id}_*int*_listeners.json"
-    listener_files = list(cluster_data.data_dir.glob(int_lb_pattern))
+    listener_files = list(cluster_data.aws_dir.glob(int_lb_pattern))
 
     if len(listener_files) == 0:
         pytest.skip("No internal load balancer listener files found")
@@ -738,7 +738,7 @@ def test_api_nlb_listener_port_22623(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.load_balancers
 def test_nlb_listeners_have_default_actions(cluster_data: ClusterData, infra_id: str):
     """NLB listeners should have default actions configured"""
-    listener_files = list(cluster_data.data_dir.glob(f"{cluster_data.cluster_id}_*_listeners.json"))
+    listener_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_listeners.json"))
 
     if len(listener_files) == 0:
         pytest.skip("No listener files found")
