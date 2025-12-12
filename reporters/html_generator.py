@@ -460,7 +460,8 @@ class HTMLReportGenerator:
                             <td class="test-duration">{self._format_test_duration(duration)}</td>
                             <td class="test-details-cell">
                                 <button class="details-toggle" onclick="toggleTestDetails('{test_id}')">
-                                    <span class="toggle-arrow">►</span> View Details
+                                    <span class="toggle-arrow">►</span>
+                                    <span class="toggle-text">View Details</span>
                                 </button>
                             </td>
                         </tr>
@@ -1114,17 +1115,27 @@ class HTMLReportGenerator:
                 detailsRow.classList.remove('hidden');
                 button.classList.add('expanded');
                 button.querySelector('.toggle-arrow').textContent = '▼';
-                button.innerHTML = button.innerHTML.replace('View Details', 'Hide Details');
+                button.querySelector('.toggle-text').textContent = 'Hide Details';
             } else {
                 detailsRow.classList.add('hidden');
                 button.classList.remove('expanded');
                 button.querySelector('.toggle-arrow').textContent = '►';
-                button.innerHTML = button.innerHTML.replace('Hide Details', 'View Details');
+                button.querySelector('.toggle-text').textContent = 'View Details';
             }
         }
 
-        // Initialize - expand all categories by default
+        // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // All categories start expanded, no action needed
+
+            // Prevent clicks inside test details from bubbling to toggle button
+            document.querySelectorAll('.test-details-content').forEach(function(content) {
+                content.addEventListener('click', function(e) {
+                    // Stop propagation for interactive elements like <details>
+                    if (e.target.tagName === 'SUMMARY' || e.target.closest('details')) {
+                        e.stopPropagation();
+                    }
+                });
+            });
         });
     </script>"""
