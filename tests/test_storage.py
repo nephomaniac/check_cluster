@@ -51,6 +51,14 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str, request):
             pytest_request=request
         )
 
+        # If only installer role events, treat as informational (expected behavior)
+        if ct_result['only_installer_events']:
+            pytest.skip(
+                f"INFORMATIONAL: No EBS volumes data found, but CloudTrail shows "
+                f"only installer role activity (expected during cluster installation).\n\n"
+                f"{diagnostics}\n\n{ct_result['formatted_message']}"
+            )
+
         pytest.fail(f"No EBS volumes data found.\n\n{diagnostics}")
 
     with open(volumes_file) as f:

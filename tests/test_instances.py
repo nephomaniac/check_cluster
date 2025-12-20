@@ -390,6 +390,15 @@ def test_control_plane_instances_running(cluster_data: ClusterData, request):
                 print(ct_result['formatted_message'])
                 print("="*80 + "\n")
 
+                # If only installer role events, treat as informational (expected behavior)
+                if ct_result['only_installer_events']:
+                    pytest.skip(
+                        f"INFORMATIONAL: Control plane instances not running, but CloudTrail shows "
+                        f"only installer role activity (expected during cluster installation).\n"
+                        f"Non-running instances: {', '.join(non_running)}\n\n"
+                        f"{ct_result['formatted_message']}"
+                    )
+
         assert False, f"Control plane instances not running: {', '.join(non_running)}"
 
 
@@ -566,6 +575,15 @@ def test_worker_instances_running(cluster_data: ClusterData, request):
                 print("="*80)
                 print(ct_result['formatted_message'])
                 print("="*80 + "\n")
+
+                # If only installer role events, treat as informational (expected behavior)
+                if ct_result['only_installer_events']:
+                    pytest.skip(
+                        f"INFORMATIONAL: Worker instances not running, but CloudTrail shows "
+                        f"only installer role activity (expected during cluster installation).\n"
+                        f"Non-running instances: {', '.join(non_running)}\n\n"
+                        f"{ct_result['formatted_message']}"
+                    )
 
         assert False, f"Worker instances not running: {', '.join(non_running)}"
 

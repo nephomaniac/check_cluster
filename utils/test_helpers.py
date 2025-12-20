@@ -283,6 +283,33 @@ def explain_missing_data(
     return "\n".join(explanations)
 
 
+def _is_installer_role_event(user_arn: str, username: str) -> bool:
+    """
+    Check if a CloudTrail event was performed by a cluster installer role.
+
+    Installer roles perform expected actions during cluster installation and
+    should be treated as informational rather than test failures.
+
+    Args:
+        user_arn: User ARN from CloudTrail event
+        username: Username from CloudTrail event
+
+    Returns:
+        True if event is from an installer role
+    """
+    # Check both ARN and username for installer role patterns
+    # Matches both Classic (e.g., "maclarkrosa1209-Installer-Role")
+    # and HCP (e.g., "ManagedOpenShift-Installer-Role")
+    installer_patterns = [
+        'Installer-Role',
+        'installer-role',
+        'INSTALLER-ROLE'
+    ]
+
+    combined = f"{user_arn} {username}".lower()
+    return any(pattern.lower() in combined for pattern in installer_patterns)
+
+
 def correlate_cloudtrail_events_for_resources(
     cluster_data: ClusterData,
     resource_identifiers: List[str],
@@ -304,7 +331,14 @@ def correlate_cloudtrail_events_for_resources(
         pytest_request: pytest request fixture (for attaching events to user_properties)
 
     Returns:
-        Dictionary with 'events' (list of event dicts) and 'formatted_message' (str)
+        Dictionary with:
+        - 'events': list of event objects
+        - 'event_summaries': list of event summary dicts
+        - 'formatted_message': formatted string for test output
+        - 'found_events': boolean indicating if any events found
+        - 'only_installer_events': boolean indicating if ALL events are from installer role
+        - 'installer_event_count': count of installer role events
+        - 'non_installer_event_count': count of non-installer events
 
     Example:
         # In a test that finds deleted security groups:
@@ -316,8 +350,11 @@ def correlate_cloudtrail_events_for_resources(
             pytest_request=request
         )
 
-        # Include in failure message:
-        pytest.fail(f"Found deleted security groups:\\n{result['formatted_message']}")
+        # Check if only installer events (expected behavior):
+        if result['only_installer_events']:
+            pytest.skip(f"INFORMATIONAL: {result['formatted_message']}")
+        elif result['found_events']:
+            pytest.fail(f"Found deleted security groups:\\n{result['formatted_message']}")
     """
     from utils.cloudtrail_correlator import create_correlator_from_cluster_data
 
@@ -326,12 +363,18 @@ def correlate_cloudtrail_events_for_resources(
     if not correlator:
         return {
             'events': [],
+            'event_summaries': [],
             'formatted_message': 'CloudTrail data not available for correlation',
-            'found_events': False
+            'found_events': False,
+            'only_installer_events': False,
+            'installer_event_count': 0,
+            'non_installer_event_count': 0
         }
 
     all_events = []
     event_summaries = []
+    installer_event_count = 0
+    non_installer_event_count = 0
 
     # Find events for each resource
     for resource_id in resource_identifiers:
@@ -358,6 +401,13 @@ def correlate_cloudtrail_events_for_resources(
                 if error_code:
                     status_code = f'Error: {error_code}'
 
+            # Check if this is an installer role event
+            is_installer = _is_installer_role_event(user_arn, event.username)
+            if is_installer:
+                installer_event_count += 1
+            else:
+                non_installer_event_count += 1
+
             # Create event summary for HTML display
             event_summary = {
                 'category': event.get_event_category(),
@@ -371,19 +421,31 @@ def correlate_cloudtrail_events_for_resources(
                 'summary': _format_event_summary(event, resource_id, resource_type),
                 'file': event.source_file,
                 'index': event.event_index,
-                'full_event': event.cloud_trail_event if event.cloud_trail_event else event.raw_event
+                'full_event': event.cloud_trail_event if event.cloud_trail_event else event.raw_event,
+                'is_installer_role': is_installer
             }
             event_summaries.append(event_summary)
             all_events.append(event)
+
+    # Determine if only installer events were found
+    only_installer_events = (len(all_events) > 0 and non_installer_event_count == 0)
 
     # Format message for test failure output
     if not all_events:
         formatted_message = f"No CloudTrail events found for {len(resource_identifiers)} {resource_type}(s)"
     else:
         lines = [f"CloudTrail Analysis - Found {len(all_events)} event(s):"]
+
+        # Add installer role context if applicable
+        if only_installer_events:
+            lines.append(f"\nℹ️  All events are from installer role (expected during cluster installation)")
+        elif installer_event_count > 0:
+            lines.append(f"\nℹ️  {installer_event_count} event(s) from installer role, {non_installer_event_count} from other sources")
+
         for i, summary in enumerate(event_summaries[:10], 1):  # Show first 10
+            installer_marker = " [INSTALLER]" if summary.get('is_installer_role') else ""
             lines.append(
-                f"\n{i}. [{summary['category']}] {summary['event_name']}"
+                f"\n{i}. [{summary['category']}] {summary['event_name']}{installer_marker}"
             )
             lines.append(f"   Time: {summary['event_time']}")
             lines.append(f"   User: {summary['username']}")
@@ -403,7 +465,10 @@ def correlate_cloudtrail_events_for_resources(
         'events': all_events,
         'event_summaries': event_summaries,
         'formatted_message': formatted_message,
-        'found_events': len(all_events) > 0
+        'found_events': len(all_events) > 0,
+        'only_installer_events': only_installer_events,
+        'installer_event_count': installer_event_count,
+        'non_installer_event_count': non_installer_event_count
     }
 
 

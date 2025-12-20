@@ -875,6 +875,7 @@ class HTMLReportGenerator:
             requested_action = event.get('requested_action', event_name)
             resource_id = event.get('resource_id', '')
             full_event = event.get('full_event', {})
+            is_installer_role = event.get('is_installer_role', False)
 
             # Determine badge class based on category
             badge_class = {
@@ -889,6 +890,11 @@ class HTMLReportGenerator:
 
             # Determine status badge color
             status_badge_class = 'status-success' if 'Success' in status_code else 'status-error'
+
+            # Create installer role badge if applicable
+            installer_badge = ''
+            if is_installer_role:
+                installer_badge = '<span class="badge badge-installer" style="margin-left: 8px;">INSTALLER ROLE</span>'
 
             # Create link to event in CloudTrail file
             event_link = ''
@@ -906,6 +912,7 @@ class HTMLReportGenerator:
                         <span class="badge {badge_class}">{escape(category)}</span>
                         <strong>{escape(requested_action)}</strong>
                         <span class="badge {status_badge_class}" style="margin-left: 8px;">{escape(status_code)}</span>
+                        {installer_badge}
                         <span class="event-time">{escape(str(event_time))}</span>
                     </div>
                     <div class="event-details" style="margin: 8px 0; font-size: 13px; color: #555;">
@@ -1878,6 +1885,12 @@ class HTMLReportGenerator:
         .badge-other {
             background-color: #6c757d;
             color: white;
+        }
+
+        .badge-installer {
+            background-color: #17a2b8;
+            color: white;
+            font-weight: 600;
         }
 
         .status-success {

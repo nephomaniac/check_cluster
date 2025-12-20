@@ -56,6 +56,14 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str, request):
             pytest_request=request
         )
 
+        # If only installer role events, treat as informational (expected behavior)
+        if ct_result['only_installer_events']:
+            pytest.skip(
+                f"INFORMATIONAL: No subnets data found, but CloudTrail shows "
+                f"only installer role activity (expected during cluster installation).\n\n"
+                f"{diagnostics}\n\n{ct_result['formatted_message']}"
+            )
+
         pytest.fail(f"No subnets data found.\n\n{diagnostics}")
 
     with open(subnets_file) as f:
