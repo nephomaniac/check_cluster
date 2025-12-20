@@ -654,7 +654,8 @@ class HTMLReportGenerator:
                 json_output_html += '</div>'
 
             # Escape status reason for safe HTML display and preserve newlines
-            escaped_status_reason = escape(status_reason).replace('\n', '<br>')
+            # Handle both actual newlines and escaped newline sequences
+            escaped_status_reason = escape(status_reason).replace('\\n', '<br>').replace('\n', '<br>')
 
             # Generate stack trace section for failed tests
             stack_trace_html = self._generate_stack_trace_html(test)
@@ -684,7 +685,7 @@ class HTMLReportGenerator:
                 if full_msg:
                     # Override status_reason to direct users to the full details
                     status_reason = 'See failure details below'
-                    escaped_status_reason = escape(status_reason).replace('\n', '<br>')
+                    escaped_status_reason = escape(status_reason).replace('\\n', '<br>').replace('\n', '<br>')
 
                     # Escape for HTML and preserve formatting
                     escaped_msg = escape(full_msg)
