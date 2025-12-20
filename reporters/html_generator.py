@@ -1126,6 +1126,13 @@ class HTMLReportGenerator:
                                     <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 2px; font-size: 11px; color: #495057;">{escape(manual_command)}</code>
                                 </div>
                     ''')
+                elif not can_validate and note:
+                    # Show status badge for inline checks (no test, no manual command, but has note)
+                    html_parts.append(f'''
+                                <div style="font-size: 12px; margin-top: 4px;">
+                                    <span style="background: {status_bg}; color: {status_color}; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 10px; margin-right: 6px;">INLINE CHECK</span>
+                                </div>
+                    ''')
 
                 # Add note if present
                 if note:

@@ -66,10 +66,9 @@ def build_remediation_checklist(request, resource_type: str = "API Server") -> d
                 },
                 {
                     "description": "Check CloudTrail for Stop/Terminate events",
-                    "test": "test_no_security_group_revocations",
-                    "test_file": "tests/test_cloudtrail.py",
-                    "can_validate": True,
-                    "note": "CloudTrail events checked during this test"
+                    "test": None,
+                    "can_validate": False,
+                    "note": "CloudTrail correlation performed inline in this test - see Failure Details"
                 }
             ]
         },
