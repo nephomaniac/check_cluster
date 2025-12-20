@@ -701,6 +701,10 @@ class HTMLReportGenerator:
                         </details>
                     </div>'''
 
+            # Generate installation phase analysis section (for all test outcomes)
+            # This shows bootstrap progress visualization even for passing tests
+            installation_phase_html = self._generate_installation_phase_section_html(test)
+
             html_parts.append(f"""
                         <tr class="{status_class}">
                             <td class="test-name">{display_name}</td>
@@ -740,6 +744,7 @@ class HTMLReportGenerator:
                                         <div class="status-reason {status_class}">{escaped_status_reason}</div>
                                     </div>
                                     {full_failure_message}
+                                    {installation_phase_html}
                                     {remediation_checklist_html}
                                     {api_requests_html}
                                     {cloudtrail_html}
@@ -1287,6 +1292,169 @@ class HTMLReportGenerator:
             </details>
         </div>
         ''')
+
+        return '\n'.join(html_parts)
+
+    def _generate_installation_phase_section_html(self, test: Dict[str, Any]) -> str:
+        """
+        Generate Installation Phase Analysis section.
+
+        Extracts bootstrap_analysis_* from user_properties and renders:
+        - Phase progress visualization (0-100% progress bar)
+        - Timeline of completed steps
+        - Current stage indicator
+        - Failures with embedded remediation
+        - Links to related tests
+
+        Args:
+            test: Test result dictionary from JSON report
+
+        Returns:
+            HTML string for installation phase analysis section
+        """
+        from html import escape
+
+        user_properties = test.get('user_properties', [])
+        bootstrap_analyses = {}
+
+        # Extract all bootstrap analyses
+        for prop in user_properties:
+            if isinstance(prop, dict):
+                for key, value in prop.items():
+                    if key.startswith('bootstrap_analysis_'):
+                        instance_id = key.replace('bootstrap_analysis_', '')
+                        bootstrap_analyses[instance_id] = value
+
+        if not bootstrap_analyses:
+            return ''
+
+        html_parts = []
+        html_parts.append('''
+    <div class="detail-section installation-phase-section">
+        <details open style="margin: 10px 0;">
+            <summary style="cursor: pointer; font-weight: bold; color: #3498db; padding: 8px; background: #e8f4f8; border: 1px solid #3498db; border-radius: 4px; user-select: none;">
+                🔍 Installation Phase Analysis
+            </summary>
+            <div style="margin-top: 10px; padding: 15px; background: #fff; border: 1px solid #dee2e6; border-radius: 4px;">
+        ''')
+
+        for instance_id, analysis in bootstrap_analyses.items():
+            instance_name = analysis.get('instance_name', instance_id)
+            stage = analysis.get('stage', 'unknown')
+            progress = analysis.get('progress_percentage', 0)
+            current_step = analysis.get('current_step', 'Unknown')
+            completed_steps = analysis.get('completed_steps', [])
+            failures = analysis.get('failures', [])
+            timeline = analysis.get('timeline', [])
+
+            # Determine progress color
+            if progress < 50:
+                progress_color = '#ffc107'  # Yellow
+            elif progress < 90:
+                progress_color = '#17a2b8'  # Blue
+            else:
+                progress_color = '#28a745'  # Green
+
+            # Render instance analysis
+            html_parts.append(f'''
+                <div class="phase-instance" style="margin-bottom: 20px; border: 1px solid #dee2e6; border-radius: 4px; overflow: hidden;">
+                    <div class="phase-instance-header" style="background: #f8f9fa; padding: 12px; border-bottom: 1px solid #dee2e6;">
+                        <strong>Instance:</strong> {escape(instance_name)} <span style="color: #6c757d; font-size: 12px;">({escape(instance_id)})</span>
+                    </div>
+                    <div class="phase-instance-body" style="padding: 15px;">
+            ''')
+
+            # Progress bar
+            html_parts.append(f'''
+                <div class="phase-progress-container" style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                        <span style="font-weight: 600; color: #2c3e50;">Progress:</span>
+                        <span style="font-weight: 600; color: {progress_color};">{progress}%</span>
+                    </div>
+                    <div class="phase-progress-bar" style="width: 100%; height: 30px; background: #e9ecef; border-radius: 15px; overflow: hidden; position: relative;">
+                        <div class="phase-progress-fill" style="width: {progress}%; height: 100%; background: linear-gradient(90deg, {progress_color}, {progress_color}aa); transition: width 0.3s ease;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 12px; font-weight: 600; color: #2c3e50;">
+                            {escape(stage.replace('_', ' ').title())}
+                        </div>
+                    </div>
+                </div>
+            ''')
+
+            # Current step
+            html_parts.append(f'''
+                <div style="margin-bottom: 15px; padding: 10px; background: #e8f4f8; border-left: 4px solid #3498db; border-radius: 4px;">
+                    <strong>Current Step:</strong> {escape(current_step)}
+                </div>
+            ''')
+
+            # Completed steps timeline
+            if completed_steps:
+                html_parts.append('''
+                    <div class="phase-timeline" style="margin: 15px 0; padding: 15px; background: #f8f9fa; border-left: 3px solid #28a745; border-radius: 4px;">
+                        <strong style="color: #28a745;">Completed Steps:</strong>
+                        <ul style="list-style: none; padding-left: 0; margin: 10px 0 0 0;">
+                ''')
+                for step in completed_steps:
+                    html_parts.append(f'''
+                        <li class="phase-timeline-item" style="padding: 8px 0; display: flex; align-items: center; gap: 10px;">
+                            <span class="phase-timeline-icon" style="width: 20px; height: 20px; border-radius: 50%; background: #28a745; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; flex-shrink: 0;">✓</span>
+                            <span style="color: #2c3e50;">{escape(step)}</span>
+                        </li>
+                    ''')
+                html_parts.append('</ul></div>')
+
+            # Failures section
+            if failures:
+                html_parts.append(f'''
+                    <div class="phase-failures" style="margin: 15px 0; padding: 15px; background: #fff5f5; border: 1px solid #f8d7da; border-radius: 4px;">
+                        <strong style="color: #e74c3c;">⚠️ Failures Detected ({len(failures)}):</strong>
+                ''')
+
+                for failure in failures:
+                    failure_type = failure.get('type', 'unknown')
+                    message = failure.get('message', 'No message')
+                    line = failure.get('line', 'N/A')
+                    pattern_id = failure.get('pattern_id', '')
+                    remediation_steps = failure.get('remediation', [])
+
+                    html_parts.append(f'''
+                        <div class="phase-failure-item" style="margin: 12px 0; padding: 12px; background: white; border-left: 4px solid #e74c3c; border-radius: 3px;">
+                            <div style="font-weight: 600; color: #e74c3c; margin-bottom: 6px;">
+                                {escape(failure_type.replace('_', ' ').title())} <span style="font-size: 11px; color: #6c757d;">(Line {line})</span>
+                            </div>
+                            <div style="font-size: 13px; color: #2c3e50; margin-bottom: 8px; font-family: monospace; background: #f8f9fa; padding: 8px; border-radius: 3px; overflow-x: auto; word-wrap: break-word;">
+                                {escape(message)}
+                            </div>
+                    ''')
+
+                    if remediation_steps:
+                        html_parts.append('''
+                            <div style="margin-top: 8px;">
+                                <strong style="color: #2c3e50; font-size: 12px;">Remediation:</strong>
+                                <ol style="margin: 5px 0 0 20px; padding: 0; font-size: 12px; color: #495057;">
+                        ''')
+                        for step in remediation_steps:
+                            html_parts.append(f'<li style="margin: 4px 0;">{escape(step)}</li>')
+                        html_parts.append('</ol></div>')
+
+                    html_parts.append('</div>')  # Close failure-item
+
+                html_parts.append('</div>')  # Close phase-failures
+
+            # Timeline summary
+            if timeline and len(timeline) > 0:
+                html_parts.append(f'''
+                    <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                        <strong style="color: #6c757d; font-size: 12px;">Timeline:</strong>
+                        <span style="color: #6c757d; font-size: 12px;">
+                            {len(timeline)} events recorded
+                        </span>
+                    </div>
+                ''')
+
+            html_parts.append('</div></div>')  # Close phase-instance-body and phase-instance
+
+        html_parts.append('</div></details></div>')  # Close installation-phase-section
 
         return '\n'.join(html_parts)
 
