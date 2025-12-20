@@ -21,16 +21,52 @@ from models.cluster import ClusterData
 
 @pytest.mark.network
 def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have at least one subnet"""
+    """Cluster should have at least one subnet
+
+    Why: Subnets provide IP address ranges for cluster resources and enable network isolation.
+
+    Failure indicates: No subnet data was collected or subnets don't exist in AWS.
+
+    Success indicates: Subnet data exists and was successfully collected.
+    """
     subnets_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_subnets.json"
 
     if not subnets_file.exists():
-        pytest.skip(f"Subnets file not found: {subnets_file}")
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # Get comprehensive diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="Subnets",
+            expected_file=f"{cluster_data.cluster_id}_subnets.json",
+            api_service="ec2",
+            api_operation="describe_subnets",
+            resource_identifier=infra_id
+        )
+
+        pytest.fail(f"No subnets data found.\n\n{diagnostics}")
 
     with open(subnets_file) as f:
         subnets_data = json.load(f)
 
     subnets = subnets_data.get('Subnets', [])
+
+    if not subnets:
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # File exists but contains no subnets - get diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="Subnets",
+            expected_file=f"{cluster_data.cluster_id}_subnets.json",
+            api_service="ec2",
+            api_operation="describe_subnets",
+            resource_identifier=infra_id
+        )
+
+        pytest.fail(f"No subnets found for cluster {infra_id}.\n\n{diagnostics}")
 
     print(f"\n✓ Found {len(subnets)} subnets:")
     subnet_summary = [{

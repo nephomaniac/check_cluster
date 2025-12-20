@@ -150,16 +150,43 @@ def test_byo_vpc_subnets_have_cluster_tags(cluster_data: ClusterData, byo_subnet
 
 
 @pytest.mark.network
+@pytest.mark.severity("CRITICAL")
+@pytest.mark.blocks_install
 def test_byo_vpc_subnets_have_role_tags(cluster_data: ClusterData, byo_subnet_ids, byo_subnet_files):
-    """BYO VPC subnets should have kubernetes role tags.
+    """BYO VPC subnets must have Kubernetes role tags for load balancer provisioning.
 
-    Why: Kubernetes uses role tags (kubernetes.io/role/elb for public subnets,
-    kubernetes.io/role/internal-elb for private subnets) to determine where to
-    provision load balancers.
+    Why: Kubernetes Cloud Controller Manager (CCM) uses these tags to identify which
+    subnets can be used for provisioning Elastic Load Balancers. Without these tags,
+    the cluster cannot create load balancers for the API server, ingress controllers,
+    or services with type=LoadBalancer.
 
-    Failure indicates: Subnets are missing role tags, which may cause issues with
-    load balancer provisioning. Public subnets should have kubernetes.io/role/elb,
-    private subnets should have kubernetes.io/role/internal-elb.
+    Failure indicates: Subnets are missing role tags, which will cause:
+    - Cluster installation to fail during bootstrap (BootstrapFailed)
+    - API load balancer cannot be created
+    - Ingress controllers cannot provision load balancers
+    - Service type=LoadBalancer resources will remain in pending state
+
+    Success indicates: Subnets are properly tagged and Kubernetes CCM can successfully
+    provision load balancers for cluster services.
+
+    Remediation:
+      For private/internal subnets (private clusters):
+        $ aws ec2 create-tags --resources <subnet-id> \\
+            --tags Key=kubernetes.io/role/internal-elb,Value=1 \\
+            --region <region>
+
+      For public subnets (public clusters):
+        $ aws ec2 create-tags --resources <subnet-id> \\
+            --tags Key=kubernetes.io/role/elb,Value=1 \\
+            --region <region>
+
+      Verify tags applied:
+        $ aws ec2 describe-subnets --subnet-ids <subnet-id> \\
+            --query 'Subnets[0].Tags' --region <region>
+
+    Documentation: https://docs.openshift.com/rosa/rosa_planning/rosa-sts-aws-prereqs.html#rosa-vpc_prerequisites
+
+    Severity: CRITICAL - Will prevent cluster installation
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")
@@ -268,14 +295,63 @@ def test_byo_vpc_subnets_available(cluster_data: ClusterData, byo_subnet_ids, by
 
 
 @pytest.mark.network
+@pytest.mark.severity("CRITICAL")
+@pytest.mark.blocks_install
 def test_byo_vpc_subnet_cidr_within_vpc_cidr(cluster_data: ClusterData, byo_subnet_ids, byo_subnet_files):
-    """BYO VPC subnet CIDR blocks must be within VPC CIDR.
+    """BYO VPC subnet CIDR blocks must be within VPC CIDR range.
 
-    Why: All subnet CIDR blocks must be subnets of the VPC CIDR block. This is
-    an AWS requirement for proper IP routing.
+    Why: AWS requires all subnet CIDR blocks to be subnets (subdivisions) of the
+    VPC CIDR block. This is fundamental to IP routing - packets destined for subnet
+    IPs must be routable within the VPC network.
 
-    Failure indicates: Subnet CIDR blocks are not properly contained within the
-    VPC CIDR, which would be an invalid AWS configuration.
+    Failure indicates: Subnet CIDR is not within VPC CIDR, which causes:
+    - Routing failures - instances cannot communicate
+    - AWS will reject subnet creation if CIDR is outside VPC CIDR
+    - Cluster installation will fail due to network unreachability
+    - BootstrapFailed errors during installation
+
+    Success indicates: Subnet CIDRs are properly contained within VPC CIDR and
+    routing will function correctly.
+
+    Remediation:
+      Option 1 - Add secondary CIDR to VPC (if subnet already exists):
+        # Associate additional CIDR block to VPC
+        $ aws ec2 associate-vpc-cidr-block \\
+            --vpc-id <vpc-id> \\
+            --cidr-block <larger-cidr-that-includes-subnet> \\
+            --region <region>
+
+        # Wait for association to complete
+        $ aws ec2 describe-vpcs --vpc-ids <vpc-id> \\
+            --query 'Vpcs[0].CidrBlockAssociationSet' \\
+            --region <region>
+
+      Option 2 - Use subnet within existing VPC CIDR (preferred):
+        # Create new subnet within VPC CIDR range
+        $ aws ec2 create-subnet \\
+            --vpc-id <vpc-id> \\
+            --cidr-block <cidr-within-vpc-range> \\
+            --availability-zone <az> \\
+            --region <region>
+
+        # Tag the new subnet
+        $ aws ec2 create-tags --resources <new-subnet-id> \\
+            --tags Key=Name,Value=<name> \\
+                   Key=kubernetes.io/role/internal-elb,Value=1 \\
+                   Key=kubernetes.io/cluster/<infra-id>,Value=shared
+
+      Verify CIDR relationships:
+        $ aws ec2 describe-vpcs --vpc-ids <vpc-id> \\
+            --query 'Vpcs[0].{VpcCidr:CidrBlock,AdditionalCidrs:CidrBlockAssociationSet[*].CidrBlock}' \\
+            --region <region>
+
+        $ aws ec2 describe-subnets --subnet-ids <subnet-id> \\
+            --query 'Subnets[0].CidrBlock' \\
+            --region <region>
+
+    Documentation: https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html
+
+    Severity: CRITICAL - Will prevent cluster installation
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")
@@ -304,15 +380,40 @@ def test_byo_vpc_subnet_cidr_within_vpc_cidr(cluster_data: ClusterData, byo_subn
         pytest.skip("VPC data is empty")
 
     vpc = vpcs[0]
-    vpc_cidr = vpc.get('CidrBlock')
 
-    if not vpc_cidr:
-        pytest.skip("VPC CIDR not found")
+    # Get ALL VPC CIDR blocks (primary + all associations)
+    # VPCs can have multiple CIDR blocks via CidrBlockAssociationSet
+    vpc_cidr_blocks = []
+
+    # Add primary CIDR block if present
+    primary_cidr = vpc.get('CidrBlock')
+    if primary_cidr:
+        vpc_cidr_blocks.append(primary_cidr)
+
+    # Add all associated CIDR blocks
+    cidr_associations = vpc.get('CidrBlockAssociationSet', [])
+    for assoc in cidr_associations:
+        # Only include CIDRs in 'associated' state
+        if assoc.get('CidrBlockState', {}).get('State') == 'associated':
+            cidr_block = assoc.get('CidrBlock')
+            if cidr_block and cidr_block not in vpc_cidr_blocks:
+                vpc_cidr_blocks.append(cidr_block)
+
+    if not vpc_cidr_blocks:
+        pytest.skip("VPC has no CIDR blocks configured")
 
     # Import ipaddress for CIDR validation
     import ipaddress
 
-    vpc_network = ipaddress.ip_network(vpc_cidr)
+    # Convert VPC CIDRs to network objects
+    vpc_networks = []
+    for cidr in vpc_cidr_blocks:
+        try:
+            vpc_networks.append(ipaddress.ip_network(cidr))
+        except ValueError as e:
+            pytest.fail(f"Invalid VPC CIDR block {cidr}: {e}")
+
+    # Validate each subnet is within at least one VPC CIDR
     invalid_subnets = []
 
     for subnet_id, subnet_data in byo_subnet_files.items():
@@ -324,12 +425,28 @@ def test_byo_vpc_subnet_cidr_within_vpc_cidr(cluster_data: ClusterData, byo_subn
             if subnet_cidr:
                 try:
                     subnet_network = ipaddress.ip_network(subnet_cidr)
-                    if not subnet_network.subnet_of(vpc_network):
+
+                    # Check if subnet is within ANY of the VPC CIDR blocks
+                    is_valid = False
+                    for vpc_network in vpc_networks:
+                        if subnet_network.subnet_of(vpc_network):
+                            is_valid = True
+                            break
+
+                    if not is_valid:
+                        # Subnet not within any VPC CIDR
+                        vpc_cidrs_str = ', '.join(vpc_cidr_blocks)
                         invalid_subnets.append(
-                            f"{subnet_id} ({subnet_cidr} not in VPC {vpc_cidr})"
+                            f"{subnet_id} ({subnet_cidr} not within any VPC CIDR: {vpc_cidrs_str})"
                         )
                 except ValueError as e:
                     invalid_subnets.append(f"{subnet_id} (invalid CIDR: {e})")
 
-    assert not invalid_subnets, \
-        f"Subnets with CIDR blocks outside VPC CIDR: {', '.join(invalid_subnets)}"
+    if invalid_subnets:
+        # Show all VPC CIDRs in error message for context
+        vpc_cidrs_display = '\n  '.join(f"- {cidr}" for cidr in vpc_cidr_blocks)
+        pytest.fail(
+            f"Subnets with CIDR blocks outside all VPC CIDRs:\n"
+            f"  VPC CIDRs:\n  {vpc_cidrs_display}\n"
+            f"  Invalid subnets: {', '.join(invalid_subnets)}"
+        )

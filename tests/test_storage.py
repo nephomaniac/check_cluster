@@ -16,11 +16,31 @@ from models.cluster import ClusterData
 
 @pytest.mark.storage
 def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have EBS volumes for instances"""
+    """Cluster should have EBS volumes for instances
+
+    Why: EBS volumes provide persistent storage for cluster nodes and etcd data.
+
+    Failure indicates: No EBS volume data was collected or volumes don't exist in AWS.
+
+    Success indicates: EBS volume data exists and was successfully collected.
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
-        pytest.skip(f"EBS volumes file not found: {volumes_file}")
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # Get comprehensive diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="EBS Volumes",
+            expected_file=f"{cluster_data.cluster_id}_ebs_volumes.json",
+            api_service="ec2",
+            api_operation="describe_volumes",
+            resource_identifier=infra_id
+        )
+
+        pytest.fail(f"No EBS volumes data found.\n\n{diagnostics}")
 
     with open(volumes_file) as f:
         volumes_data = json.load(f)
@@ -42,9 +62,29 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
             "State": vol.get("State"),
             "Encrypted": vol.get("Encrypted", False)
         } for vol in cluster_volumes]
+        print("\n" + "─"*80)
+        print("EC2 DESCRIBE-VOLUMES OUTPUT - EBS Volumes for Cluster")
+        print(f"Shows {len(cluster_volumes)} volume(s) with size, type, state, and encryption status")
+        print("Relevance: EBS volumes provide persistent storage for cluster nodes and data")
+        print("─"*80)
         print(json.dumps(volume_summary, indent=2))
+        print("─"*80)
     else:
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # File exists but contains no cluster volumes
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="EBS Volumes",
+            expected_file=f"{cluster_data.cluster_id}_ebs_volumes.json",
+            api_service="ec2",
+            api_operation="describe_volumes",
+            resource_identifier=infra_id
+        )
+
         print(f"\n✗ No EBS volumes found for cluster {infra_id}")
+        pytest.fail(f"No EBS volumes found for cluster {infra_id}.\n\n{diagnostics}")
 
     assert len(cluster_volumes) > 0, f"No EBS volumes found for cluster {infra_id}"
 
@@ -80,10 +120,22 @@ def test_ebs_volumes_in_use_or_available(cluster_data: ClusterData, infra_id: st
             "VolumeId": vol.get("VolumeId"),
             "State": vol.get("State")
         } for vol in cluster_volumes]
+        print("\n" + "─"*80)
+        print("EC2 DESCRIBE-VOLUMES OUTPUT - Volume State Verification")
+        print(f"Showing all {len(cluster_volumes)} volumes are in 'in-use' or 'available' state")
+        print("Relevance: Ensures volumes are properly attached or ready for use")
+        print("─"*80)
         print(json.dumps(volume_states, indent=2))
+        print("─"*80)
     else:
         print(f"\n✗ Volumes in unexpected state:")
+        print("\n" + "─"*80)
+        print("EC2 DESCRIBE-VOLUMES OUTPUT - Volumes in Unexpected State")
+        print(f"Shows {len(bad_state_volumes)} volume(s) not in 'in-use' or 'available' state")
+        print("Relevance: Volumes in bad states may indicate detachment issues or failures")
+        print("─"*80)
         print(json.dumps(bad_state_volumes, indent=2))
+        print("─"*80)
 
     assert len(bad_state_volumes) == 0, \
         f"EBS volumes in unexpected state: {', '.join(bad_state_volumes)}"
@@ -122,15 +174,27 @@ def test_ebs_volumes_encrypted(cluster_data: ClusterData, infra_id: str):
             "Encrypted": vol.get("Encrypted", False),
             "KmsKeyId": vol.get("KmsKeyId", "default")
         } for vol in cluster_volumes]
+        print("\n" + "─"*80)
+        print("EC2 DESCRIBE-VOLUMES OUTPUT - Volume Encryption Status")
+        print(f"Showing all {len(cluster_volumes)} volumes are encrypted")
+        print("Relevance: Encryption is required for security compliance and data protection")
+        print("─"*80)
         print(json.dumps(encryption_summary, indent=2))
+        print("─"*80)
     else:
         print(f"\n✗ Found {len(unencrypted_volumes)} unencrypted volumes:")
+        print("\n" + "─"*80)
+        print("EC2 DESCRIBE-VOLUMES OUTPUT - Unencrypted Volumes Found")
+        print(f"Shows {len(unencrypted_volumes)} unencrypted volume(s) - SECURITY RISK")
+        print("Relevance: Unencrypted volumes violate security compliance requirements")
+        print("─"*80)
         print(json.dumps({
             "TotalVolumes": len(cluster_volumes),
             "EncryptedCount": encrypted_count,
             "UnencryptedCount": len(unencrypted_volumes),
             "UnencryptedVolumeIds": unencrypted_volumes
         }, indent=2))
+        print("─"*80)
 
     assert len(unencrypted_volumes) == 0, \
         f"Unencrypted EBS volumes found (security risk): {unencrypted_volumes}"

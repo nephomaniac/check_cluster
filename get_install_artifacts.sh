@@ -400,7 +400,7 @@ fetch_instance_eni_pps_allowance_exceeded() {
 # Uses global variables: clusterid, WRKDIR
 fetch_instance_console_logs() {
   local instance_id="$1"
-  local console_file="${_F_PREFIX}_${instance_id}_console.log"
+  local console_file="${_F_PREFIX}_${instance_id}_console.txt"
 
   echo "VM: ${instance_id}"
   if [ -f "${console_file}" ]; then
@@ -418,6 +418,34 @@ fetch_instance_console_logs() {
     echo "${console_output}" > "${console_file}"
   else
     PERR "Failed to fetch ec2 console output for instance: ${instance_id}"
+    return 1
+  fi
+}
+
+# Fetch EC2 instance user data (contains Ignition configuration pointer)
+# Arguments:
+#   $1 - EC2 instance ID
+# Uses global variables: clusterid, WRKDIR
+fetch_instance_user_data() {
+  local instance_id="$1"
+  local user_data_file="${_F_PREFIX}_${instance_id}_user_data.txt"
+
+  if [ -f "${user_data_file}" ]; then
+    GREEN "Using existing vm ${instance_id} user data file: ${user_data_file}"
+    return 0
+  fi
+
+  BLUE "Getting user data for instance ${instance_id}"
+  echo "aws ec2 describe-instance-attribute --instance-id ${instance_id} --attribute userData --output text --query 'UserData.Value' | base64 -d > ${user_data_file}"
+
+  local user_data
+  user_data=$(aws ec2 describe-instance-attribute --instance-id ${instance_id} --attribute userData --output text --query 'UserData.Value' 2>/dev/null | base64 -d 2>/dev/null)
+
+  if [[ $? -eq 0 && -n "${user_data}" ]]; then
+    echo "${user_data}" > "${user_data_file}"
+    echo "Saved user data (Ignition config pointer) to: ${user_data_file}"
+  else
+    echo "No user data available for instance: ${instance_id}"
     return 1
   fi
 }
@@ -629,10 +657,11 @@ get_ec2_instance_info() {
     [.InstanceId, .State, (.Tags[] | select(.Key=="Name") | .Value // "N/A")]) |
     @tsv' ${CLUSTER_EC2_INSTANCES} | column -t
 
-    HDR "Getting EC2 instance metrics, and console logs"
+    HDR "Getting EC2 instance metrics, console logs, and user data"
     # iterate over all the instance IDs found existing in AWS and grab their console logs...
     jq --arg tag_str "${INFRA_ID}" -r '.[] | unique_by(.InstanceId)[]| select(.Tags[]? | .Value | contains($tag_str)) |.InstanceId' ${CLUSTER_EC2_INSTANCES} | while read vm; do
       fetch_instance_console_logs "${vm}"
+      fetch_instance_user_data "${vm}"
       fetch_instance_cpu_percent_metrics "${vm}"
       fetch_instance_mem_percent_metrics "${vm}"
       fetch_instance_ebs_iops_exceeded "${vm}"

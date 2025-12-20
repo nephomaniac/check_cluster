@@ -53,19 +53,52 @@ def get_ingress_load_balancer(cluster_data: ClusterData) -> dict:
 
 @pytest.mark.load_balancers
 def test_load_balancers_exist(cluster_data: ClusterData):
-    """Cluster must have load balancers configured"""
+    """Cluster must have load balancers configured
+
+    Why: Load balancers provide access to cluster API and application ingress.
+
+    Failure indicates: Load balancers are missing, not created, or were deleted.
+
+    Success indicates: Load balancers exist and were successfully collected.
+    """
     lbs = get_load_balancers_by_infra_id(cluster_data)
+
+    if not lbs:
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # Get infra ID for resource identification
+        infra_id = cluster_data.infra_id
+
+        # Get comprehensive diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="Load Balancers",
+            expected_file=f"{cluster_data.cluster_id}_load_balancers.json",
+            api_service="elbv2",
+            api_operation="describe_load_balancers",
+            resource_identifier=infra_id
+        )
+
+        pytest.fail(f"No load balancers found for cluster.\n\n{diagnostics}")
 
     print(f"\n✓ Found {len(lbs)} load balancers:")
     lb_summary = [{"LoadBalancerName": lb.get("LoadBalancerName"), "DNSName": lb.get("DNSName"), "Scheme": lb.get("Scheme"), "Type": lb.get("Type")} for lb in lbs]
     print(json.dumps(lb_summary, indent=2))
 
-    assert lbs, "No load balancers found for cluster"
+    assert len(lbs) > 0, "No load balancers found for cluster"
 
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_exists(cluster_data: ClusterData):
-    """API load balancer must exist"""
+    """API load balancer must exist
+
+    Why: API load balancer provides access to the cluster API server.
+
+    Failure indicates: API load balancer was not created or was deleted.
+
+    Success indicates: API load balancer exists and is accessible.
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if api_lb:
@@ -78,9 +111,29 @@ def test_api_load_balancer_exists(cluster_data: ClusterData):
             "Type": api_lb.get("Type")
         }, indent=2))
     else:
-        print(f"\n✗ API load balancer not found")
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
 
-    assert api_lb, "API load balancer not found"
+        # Construct expected load balancer name
+        infra_id = cluster_data.infra_id
+        expected_lb_name = f"{infra_id}-ext"  # External API LB pattern
+
+        print(f"\n✗ API load balancer not found")
+        print(f"   Expected name pattern: {expected_lb_name}")
+
+        # Get comprehensive diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="API Load Balancer (matching pattern {expected_lb_name})",
+            expected_file=f"{cluster_data.cluster_id}_load_balancers.json",
+            api_service="elbv2",
+            api_operation="describe_load_balancers",
+            resource_identifier=expected_lb_name
+        )
+
+        pytest.fail(f"API load balancer not found.\n\n{diagnostics}")
+
+    assert api_lb is not None, "API load balancer not found"
 
 
 @pytest.mark.load_balancers

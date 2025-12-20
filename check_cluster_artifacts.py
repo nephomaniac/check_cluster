@@ -143,9 +143,42 @@ def print_status(status: str, message: str):
         )
 
 def load_json_file(filename: str, suppress_warning: bool = False) -> Dict:
-    """Load a JSON file and return its contents"""
+    """
+    Load a JSON file and return its contents.
+
+    Supports both new directory structure (sources/ocm, sources/aws, etc.)
+    and legacy flat structure for backward compatibility.
+    """
     global source_directory
-    filepath = source_directory / filename
+
+    # Check if using new directory structure
+    sources_dir = source_directory / "sources"
+    use_new_structure = sources_dir.exists() and sources_dir.is_dir()
+
+    if use_new_structure:
+        # Determine which subdirectory to use based on file type
+        if any(pattern in filename for pattern in ['_cluster.json', '_resources.json', '_cluster_context.json']):
+            # OCM data files
+            filepath = sources_dir / "ocm" / filename
+        elif any(pattern in filename for pattern in ['_CPUUtilization_', '_mem_used_percent_',
+                                                      '_InstanceEBS', '_bw_in_allowance_',
+                                                      '_bw_out_allowance_', '_pps_allowance_']):
+            # CloudWatch metrics files
+            filepath = sources_dir / "metrics" / filename
+        elif '_console.log' in filename:
+            # Console logs
+            filepath = sources_dir / "hosts" / filename
+        else:
+            # AWS data files (security groups, instances, VPCs, load balancers, Route53, CloudTrail, etc.)
+            filepath = sources_dir / "aws" / filename
+
+        # Fall back to flat structure if file not found in new structure
+        if not filepath.exists():
+            filepath = source_directory / filename
+    else:
+        # Legacy flat structure - all files in source_directory
+        filepath = source_directory / filename
+
     if not filepath.exists():
         if not suppress_warning:
             print_status("WARNING", f"File not found: {filename}")
@@ -332,7 +365,10 @@ def find_related_cloudtrail_events(cluster_id: str, infra_id: str,
 
 def load_cloudwatch_metrics(cluster_id: str, instance_id: str, metric_name: str) -> Dict:
     """
-    Load CloudWatch metrics from JSON file
+    Load CloudWatch metrics from JSON file.
+
+    Supports both new directory structure (sources/metrics/) and legacy flat structure.
+
     Args:
         cluster_id: The cluster ID used for file naming
         instance_id: The EC2 instance ID
@@ -345,7 +381,15 @@ def load_cloudwatch_metrics(cluster_id: str, instance_id: str, metric_name: str)
     pattern = f"{cluster_id}_{instance_id}_{metric_name}_*.json"
 
     try:
-        matching_files = list(source_directory.glob(pattern))
+        # Check for new directory structure
+        sources_metrics = source_directory / "sources" / "metrics"
+        if sources_metrics.exists() and sources_metrics.is_dir():
+            # Use new structure - metrics in sources/metrics/
+            matching_files = list(sources_metrics.glob(pattern))
+        else:
+            # Use legacy flat structure - metrics in source_directory
+            matching_files = list(source_directory.glob(pattern))
+
         if not matching_files:
             return {}
 
@@ -661,9 +705,17 @@ def get_cluster_resource_ids(cluster_id: str, infra_id: str) -> Dict:
             cluster_resources['nat_gateways'].update(nat_ids)
             cluster_resources['all_ids'].update(nat_ids)
 
-    # 5. Scan any .log files in source directory
+    # 5. Scan any .log files in source directory (or sources/hosts/ for new structure)
     global source_directory
-    for log_file in source_directory.glob("*.log"):
+    sources_hosts = source_directory / "sources" / "hosts"
+    if sources_hosts.exists() and sources_hosts.is_dir():
+        # New structure - check sources/hosts/
+        log_dir = sources_hosts
+    else:
+        # Legacy structure - check source_directory
+        log_dir = source_directory
+
+    for log_file in log_dir.glob("*.log"):
         try:
             with open(log_file, 'r') as f:
                 log_content = f.read()
@@ -2084,9 +2136,15 @@ def check_vpc_dns_attributes(cluster_id: str, infra_id: str = None) -> Tuple[str
     if infra_id is None:
         infra_id = cluster_id.split('_')[0]
 
-    # Find VPC files
+    # Find VPC files (check sources/aws/ for new structure)
     global source_directory
-    vpc_files = list(source_directory.glob(f"{cluster_id}_vpc-*_VPC.json"))
+    sources_aws = source_directory / "sources" / "aws"
+    if sources_aws.exists() and sources_aws.is_dir():
+        # New structure - check sources/aws/
+        vpc_files = list(sources_aws.glob(f"{cluster_id}_vpc-*_VPC.json"))
+    else:
+        # Legacy structure - check source_directory
+        vpc_files = list(source_directory.glob(f"{cluster_id}_vpc-*_VPC.json"))
 
     if not vpc_files:
         print_status("WARNING", "No VPC files found")
@@ -2195,9 +2253,15 @@ def check_dhcp_options(cluster_id: str, infra_id: str = None) -> Tuple[str, List
     if infra_id is None:
         infra_id = cluster_id.split('_')[0]
 
-    # Find VPC files to get DHCP Options Set IDs
+    # Find VPC files to get DHCP Options Set IDs (check sources/aws/ for new structure)
     global source_directory
-    vpc_files = list(source_directory.glob(f"{cluster_id}_vpc-*_VPC.json"))
+    sources_aws = source_directory / "sources" / "aws"
+    if sources_aws.exists() and sources_aws.is_dir():
+        # New structure - check sources/aws/
+        vpc_files = list(sources_aws.glob(f"{cluster_id}_vpc-*_VPC.json"))
+    else:
+        # Legacy structure - check source_directory
+        vpc_files = list(source_directory.glob(f"{cluster_id}_vpc-*_VPC.json"))
 
     if not vpc_files:
         print_status("WARNING", "No VPC files found")
@@ -3521,9 +3585,15 @@ def write_html_report(cluster_name: str, cluster_uuid: str, infra_id: str,
         if category in all_check_results:
             results[category] = all_check_results[category]
 
-    # Create results directory
+    # Create results directory (use sources/results/ for new structure, or results_{timestamp} for legacy)
     timestamp = int(time.time())
-    results_dir = source_directory / f"results_{timestamp}"
+    sources_results = source_directory / "results"
+    if sources_results.exists() and sources_results.is_dir():
+        # New structure - use results/ directory
+        results_dir = sources_results
+    else:
+        # Legacy structure - create timestamped results directory
+        results_dir = source_directory / f"results_{timestamp}"
     results_dir.mkdir(exist_ok=True)
 
     # Generate cluster metadata
@@ -4096,8 +4166,14 @@ def check_ec2_console_logs(cluster_id: str, infra_id: str) -> Tuple[str, List[st
         instance_id = inst['id']
         instance_name = inst['name']
 
-        # Find console log file
-        console_log_path = source_directory / f"{cluster_id}_{instance_id}_console.log"
+        # Find console log file (check sources/hosts/ for new structure)
+        sources_hosts = source_directory / "sources" / "hosts"
+        if sources_hosts.exists() and sources_hosts.is_dir():
+            # New structure - check sources/hosts/
+            console_log_path = sources_hosts / f"{cluster_id}_{instance_id}_console.log"
+        else:
+            # Legacy structure - check source_directory
+            console_log_path = source_directory / f"{cluster_id}_{instance_id}_console.log"
 
         if not console_log_path.exists():
             print(f"{Colors.YELLOW}⚠ Console log not found for {instance_name} ({instance_id}){Colors.END}")
@@ -4270,15 +4346,22 @@ Notes:
 
     print(f"{Colors.BOLD}Source directory: {source_directory}{Colors.END}")
 
-    # Get cluster ID from first file in directory
-    cluster_files = list(source_directory.glob('*_cluster.json'))
+    # Get cluster ID from first file in directory (check sources/ocm/ for new structure)
+    sources_ocm = source_directory / "sources" / "ocm"
+    if sources_ocm.exists() and sources_ocm.is_dir():
+        # New structure - check sources/ocm/
+        cluster_files = list(sources_ocm.glob('*_cluster.json'))
+    else:
+        # Legacy structure - check source_directory
+        cluster_files = list(source_directory.glob('*_cluster.json'))
+
     if not cluster_files:
         print_status("ERROR", f"No cluster files found in: {source_directory}")
         print(f"\nMake sure the directory contains cluster data files in the format:")
         print(f"  {{cluster_id}}_cluster.json")
         print(f"  {{cluster_id}}_resources.json")
         print(f"  ... etc.\n")
-        print(f"Use get_install_artifacts.sh to collect cluster data.")
+        print(f"Use get_install_artifacts.py to collect cluster data.")
         sys.exit(1)
 
     cluster_id = cluster_files[0].stem.replace('_cluster', '')

@@ -18,18 +18,62 @@ def test_vpc_exists(cluster_data: ClusterData):
 
     Failure indicates: VPC data is missing or incomplete, suggesting the cluster has no
     network infrastructure or data collection failed.
+
+    Success indicates: VPC exists and was successfully collected from AWS.
     """
     vpcs = cluster_data.vpcs
 
     vpc_data = vpcs.get('Vpcs', [])
+
+    if not vpc_data:
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # Try to get VPC ID from cluster.json
+        vpc_id = cluster_data.cluster_json.get('network', {}).get('vpc_id', 'unknown')
+
+        # Get comprehensive diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="VPC",
+            expected_file=f"{cluster_data.cluster_id}_vpcs.json",
+            api_service="ec2",
+            api_operation="describe_vpcs",
+            resource_identifier=vpc_id if vpc_id != 'unknown' else None
+        )
+
+        pytest.fail(f"No VPC data found.\n\n{diagnostics}")
+
     print(f"\n✓ Found {len(vpc_data)} VPC(s):")
-    vpc_summary = [{"VpcId": vpc.get("VpcId"), "CidrBlock": vpc.get("CidrBlock"), "State": vpc.get("State")} for vpc in vpc_data]
+
+    # Include CidrBlockAssociationSet in summary
+    vpc_summary = []
+    for vpc in vpc_data:
+        summary = {
+            "VpcId": vpc.get("VpcId"),
+            "CidrBlock": vpc.get("CidrBlock"),
+            "State": vpc.get("State")
+        }
+        # Add CidrBlockAssociationSet if present
+        cidr_assoc = vpc.get("CidrBlockAssociationSet", [])
+        if cidr_assoc:
+            summary["CidrBlockAssociations"] = [
+                {
+                    "CidrBlock": assoc.get("CidrBlock"),
+                    "State": assoc.get("CidrBlockState", {}).get("State")
+                }
+                for assoc in cidr_assoc
+            ]
+        vpc_summary.append(summary)
+
+    print("\n" + "─"*80)
+    print("EC2 DESCRIBE-VPCS OUTPUT - Showing VPC Configuration")
+    print("Shows VPC ID, CIDR block, and state for cluster networking")
+    print("Relevance: Verifies VPC exists and is active for cluster network isolation")
+    print("─"*80)
     print(json.dumps(vpc_summary, indent=2))
+    print("─"*80)
 
-    assert vpcs, "No VPC data found"
-
-    vpc_data = vpcs.get('Vpcs', [])
-    assert vpc_data, "VPC list is empty"
     assert len(vpc_data) > 0, "No VPCs configured"
 
 
@@ -54,10 +98,20 @@ def test_vpc_dns_hostnames_enabled(cluster_data: ClusterData):
     vpc_id = vpc.get('VpcId', 'unknown')
 
     print(f"\n✓ VPC DNS configuration:")
+
+    print("\n" + "─"*80)
+    if dns_hostnames:
+        print("EC2 DESCRIBE-VPC-ATTRIBUTE OUTPUT - Showing DNS Hostnames is ENABLED")
+    else:
+        print("EC2 DESCRIBE-VPC-ATTRIBUTE OUTPUT - Showing DNS Hostnames is DISABLED")
+    print("Relevance: DNS hostnames must be enabled for EC2 instances to receive DNS names")
+    print("Impact: Required for internal service discovery and hostname-based communication")
+    print("─"*80)
     print(json.dumps({
         "VpcId": vpc_id,
         "EnableDnsHostnames": dns_hostnames
     }, indent=2))
+    print("─"*80)
 
     assert dns_hostnames, f"VPC {vpc_id} does not have DNS hostnames enabled"
 
@@ -83,17 +137,34 @@ def test_vpc_dns_support_enabled(cluster_data: ClusterData):
     vpc_id = vpc.get('VpcId', 'unknown')
 
     print(f"\n✓ VPC DNS support:")
+
+    print("\n" + "─"*80)
+    if dns_support:
+        print("EC2 DESCRIBE-VPC-ATTRIBUTE OUTPUT - Showing DNS Support is ENABLED")
+    else:
+        print("EC2 DESCRIBE-VPC-ATTRIBUTE OUTPUT - Showing DNS Support is DISABLED")
+    print("Relevance: DNS support enables Amazon DNS server at VPC CIDR +2 address")
+    print("Impact: Required for DNS resolution of internal and external hostnames")
+    print("─"*80)
     print(json.dumps({
         "VpcId": vpc_id,
         "EnableDnsSupport": dns_support
     }, indent=2))
+    print("─"*80)
 
     assert dns_support, f"VPC {vpc_id} does not have DNS support enabled"
 
 
 @pytest.mark.vpc
 def test_vpc_cidr_block_configured(cluster_data: ClusterData):
-    """VPC must have a CIDR block configured"""
+    """VPC must have a CIDR block configured
+
+    Why: The VPC CIDR block defines the IP address range for the VPC network,
+    which all subnets and resources must be allocated from.
+
+    Failure indicates: VPC has no CIDR block configuration, which means
+    no IP addresses can be allocated and the network cannot function.
+    """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
@@ -101,17 +172,65 @@ def test_vpc_cidr_block_configured(cluster_data: ClusterData):
         pytest.skip("No VPC data available")
 
     vpc = vpcs[0]
-    cidr_block = vpc.get('CidrBlock', '')
     vpc_id = vpc.get('VpcId', 'unknown')
 
-    print(f"\n✓ VPC CIDR block:")
-    print(json.dumps({
+    # Try to get CIDR block from top-level attribute first
+    cidr_block = vpc.get('CidrBlock', '')
+
+    # If not present, try CidrBlockAssociationSet
+    cidr_associations = vpc.get('CidrBlockAssociationSet', [])
+
+    print(f"\n✓ VPC CIDR configuration:")
+
+    print("\n" + "─"*80)
+    print("EC2 DESCRIBE-VPCS OUTPUT - Showing VPC CIDR Block Configuration")
+    print("Shows VPC CIDR block (IP address range) for cluster networking")
+    print("Relevance: CIDR block defines available IP addresses for cluster resources")
+    print("─"*80)
+
+    output = {
         "VpcId": vpc_id,
         "CidrBlock": cidr_block
-    }, indent=2))
+    }
 
-    assert cidr_block, f"VPC {vpc_id} has no CIDR block configured"
+    # Include CidrBlockAssociationSet if present
+    if cidr_associations:
+        output["CidrBlockAssociationSet"] = [
+            {
+                "CidrBlock": assoc.get("CidrBlock"),
+                "AssociationId": assoc.get("AssociationId"),
+                "State": assoc.get("CidrBlockState", {}).get("State")
+            }
+            for assoc in cidr_associations
+        ]
+
+    print(json.dumps(output, indent=2))
+    print("─"*80)
+
+    # Validate CIDR block exists (from either source)
+    if not cidr_block and cidr_associations:
+        # Get CIDR from CidrBlockAssociationSet
+        associated_cidrs = [
+            assoc.get('CidrBlock')
+            for assoc in cidr_associations
+            if assoc.get('CidrBlockState', {}).get('State') == 'associated'
+        ]
+        if associated_cidrs:
+            cidr_block = associated_cidrs[0]
+        elif cidr_associations:
+            cidr_block = cidr_associations[0].get('CidrBlock', '')
+
+    assert cidr_block, f"VPC {vpc_id} has no CIDR block configured (checked both CidrBlock and CidrBlockAssociationSet)"
     assert '/' in cidr_block, f"VPC {vpc_id} CIDR block is malformed: {cidr_block}"
+
+    # If CidrBlockAssociationSet is present, validate all associations are in 'associated' state
+    if cidr_associations:
+        for assoc in cidr_associations:
+            state = assoc.get('CidrBlockState', {}).get('State', 'unknown')
+            assoc_id = assoc.get('AssociationId', 'unknown')
+            assoc_cidr = assoc.get('CidrBlock', 'unknown')
+            assert state == 'associated', \
+                f"VPC {vpc_id} CIDR association {assoc_id} ({assoc_cidr}) is in state '{state}', expected 'associated'"
 
 
 @pytest.mark.vpc
@@ -128,10 +247,19 @@ def test_vpc_state_available(cluster_data: ClusterData):
     vpc_id = vpc.get('VpcId', 'unknown')
 
     print(f"\n✓ VPC state:")
+
+    print("\n" + "─"*80)
+    if state == 'available':
+        print("EC2 DESCRIBE-VPCS OUTPUT - Showing VPC State is AVAILABLE")
+    else:
+        print(f"EC2 DESCRIBE-VPCS OUTPUT - Showing VPC State is {state.upper()}")
+    print("Relevance: VPC must be in 'available' state for cluster to function")
+    print("─"*80)
     print(json.dumps({
         "VpcId": vpc_id,
         "State": state
     }, indent=2))
+    print("─"*80)
 
     assert state == 'available', f"VPC {vpc_id} is not available (state: {state})"
 
@@ -150,9 +278,16 @@ def test_dhcp_options_associated(cluster_data: ClusterData):
     vpc_id = vpc.get('VpcId', 'unknown')
 
     print(f"\n✓ VPC DHCP options:")
+
+    print("\n" + "─"*80)
+    print("EC2 DESCRIBE-VPCS OUTPUT - Showing DHCP Options Set Association")
+    print("Shows DHCP Options Set ID associated with VPC for DNS and domain configuration")
+    print("Relevance: DHCP options control DNS servers and domain names for EC2 instances")
+    print("─"*80)
     print(json.dumps({
         "VpcId": vpc_id,
         "DhcpOptionsId": dhcp_options_id
     }, indent=2))
+    print("─"*80)
 
     assert dhcp_options_id, f"VPC {vpc_id} has no DHCP options set associated"

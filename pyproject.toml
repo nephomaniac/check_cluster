@@ -36,3 +36,29 @@ ignore = [
     "E501", # line too long (handled by black)
     "B008", # do not perform function calls in argument defaults
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "instances: EC2 instance tests",
+    "vpc: VPC configuration tests",
+    "network: Network configuration tests",
+    "security_groups: Security group tests",
+    "storage: EBS storage tests",
+    "load_balancers: Load balancer tests",
+    "route53: Route53 DNS tests",
+    "iam: IAM role and policy tests",
+    "iam_roles: Individual IAM role validation tests",
+    "operator_roles: ROSA operator role tests",
+    "iam_permissions: IAM permission validation tests",
+    "installation: Cluster installation tests",
+    "aws_resources: General AWS resource tests",
+    "controlplane: Control plane / master node tests",
+    "node: Worker and infra node tests",
+    "loadbalancer: Load balancer security tests",
+    "egress: Egress traffic tests",
+    "icmp: ICMP protocol tests",
+    "ignition: OpenShift Ignition configuration tests",
+    "bootstrap: Bootstrap process tests",
+    "operators: Cluster operators tests",
+    "etcd: etcd quorum and cluster tests",
+]

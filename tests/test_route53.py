@@ -22,7 +22,19 @@ def test_hosted_zone_exists(cluster_data: ClusterData):
     zones = cluster_data.route53_zones
 
     if not zones:
-        pytest.skip("No Route53 data available")
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # Get comprehensive diagnostics
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="Route53 Hosted Zones",
+            expected_file=f"{cluster_data.cluster_id}_route53_zones.json",
+            api_service="route53",
+            api_operation="list_hosted_zones"
+        )
+
+        pytest.fail(f"No Route53 hosted zone data found.\n\n{diagnostics}")
 
     hosted_zones = zones.get('HostedZones', [])
 
@@ -34,9 +46,28 @@ def test_hosted_zone_exists(cluster_data: ClusterData):
             "ResourceRecordSetCount": zone.get("ResourceRecordSetCount"),
             "PrivateZone": zone.get("Config", {}).get("PrivateZone", False)
         } for zone in hosted_zones]
+        print("\n" + "─"*80)
+        print("ROUTE53 LIST-HOSTED-ZONES OUTPUT - Cluster DNS Zones")
+        print(f"Shows {len(hosted_zones)} hosted zone(s) for cluster DNS resolution")
+        print("Relevance: Hosted zones provide DNS for cluster API and application routes")
+        print("─"*80)
         print(json.dumps(zone_summary, indent=2))
+        print("─"*80)
     else:
+        # Import diagnostic helper
+        from utils.aws_resource_diagnostics import diagnose_missing_aws_resource
+
+        # File exists but contains no hosted zones
+        diagnostics = diagnose_missing_aws_resource(
+            cluster_data=cluster_data,
+            resource_type="Route53 Hosted Zones",
+            expected_file=f"{cluster_data.cluster_id}_route53_zones.json",
+            api_service="route53",
+            api_operation="list_hosted_zones"
+        )
+
         print("\n✗ No hosted zones found")
+        pytest.fail(f"No hosted zones found for cluster.\n\n{diagnostics}")
 
     assert hosted_zones, "No hosted zones found"
 
@@ -58,12 +89,21 @@ def test_hosted_zone_private(cluster_data: ClusterData, is_private_cluster: bool
     is_private = zone.get('Config', {}).get('PrivateZone', False)
 
     print(f"\n✓ Hosted zone privacy configuration:")
+    print("\n" + "─"*80)
+    print("ROUTE53 HOSTED-ZONE CONFIGURATION - Privacy Setting")
+    if is_private:
+        print("Showing hosted zone is PRIVATE (not publicly accessible)")
+    else:
+        print("Showing hosted zone is PUBLIC (internet-accessible)")
+    print("Relevance: Private clusters require private hosted zones for internal DNS")
+    print("─"*80)
     print(json.dumps({
         "HostedZoneId": zone_id,
         "IsPrivate": is_private,
         "ClusterType": "private" if is_private_cluster else "public",
         "Expected": "private" if is_private_cluster else "public or private"
     }, indent=2))
+    print("─"*80)
 
     if is_private_cluster:
         assert is_private, f"Private cluster should have private hosted zone {zone_id}"
@@ -84,10 +124,16 @@ def test_api_dns_record_exists(cluster_data: ClusterData):
         pytest.skip("API URL not found in cluster data")
 
     print(f"\n✓ API DNS record:")
+    print("\n" + "─"*80)
+    print("CLUSTER API ENDPOINT CONFIGURATION - DNS Record")
+    print("Showing API URL contains 'api' prefix for cluster access")
+    print("Relevance: API endpoint must be DNS-resolvable for cluster operations")
+    print("─"*80)
     print(json.dumps({
         "ApiUrl": api_url,
         "HasApiPrefix": 'api' in api_url.lower()
     }, indent=2))
+    print("─"*80)
 
     # API URL should contain the cluster domain
     assert 'api' in api_url.lower(), f"API URL does not contain 'api': {api_url}"
@@ -134,10 +180,16 @@ def test_cluster_domain_configured(cluster_data: ClusterData):
 
     if domain:
         print(f"\n✓ Cluster domain configured:")
+        print("\n" + "─"*80)
+        print("CLUSTER DNS CONFIGURATION - Base Domain")
+        print("Showing cluster base domain for DNS records")
+        print("Relevance: Base domain is used for API endpoint and application routes")
+        print("─"*80)
         print(json.dumps({
             "BaseDomain": domain,
             "IsValid": '.' in domain
         }, indent=2))
+        print("─"*80)
     else:
         print("\n✗ Cluster domain not configured")
 
