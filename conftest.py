@@ -276,9 +276,11 @@ def pytest_runtest_makereport(item, call):
             item.user_properties.append(("files_expected_but_missing", files_expected_but_missing))
             item.user_properties.append(("attributes_no_files", attrs_no_files))
 
-            # Capture CloudTrail context for failed tests
+            # Capture CloudTrail context for failed/error tests
             # This will be used by HTML report to show related events
-            if outcome.outcome in ['failed', 'skipped']:
+            # Note: 'error' status indicates Python exception (coding error)
+            #       'failed' status indicates assertion failure (test logic failed)
+            if outcome.outcome in ['failed', 'error', 'skipped']:
                 try:
                     from utils.cloudtrail_correlator import create_correlator_from_cluster_data
                     correlator = create_correlator_from_cluster_data(cluster_data)
@@ -291,9 +293,9 @@ def pytest_runtest_makereport(item, call):
                     # Don't fail test if CloudTrail correlation fails
                     pass
 
-            # Capture API request errors for failed tests
+            # Capture API request errors for failed/error tests
             # This will be used by HTML report to show permission/API issues
-            if outcome.outcome in ['failed', 'skipped']:
+            if outcome.outcome in ['failed', 'error', 'skipped']:
                 try:
                     # Get failed API requests from cluster data
                     failed_requests = cluster_data.get_failed_requests()

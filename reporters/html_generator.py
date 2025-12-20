@@ -203,10 +203,17 @@ class HTMLReportGenerator:
             # Count outcomes for this category
             passed = sum(1 for t in tests if t.get('outcome') == 'passed')
             failed = sum(1 for t in tests if t.get('outcome') == 'failed')
+            error = sum(1 for t in tests if t.get('outcome') == 'error')
             skipped = sum(1 for t in tests if t.get('outcome') == 'skipped')
             total = len(tests)
 
-            category_status = 'status-pass' if failed == 0 else 'status-fail'
+            # Determine category status: error takes precedence over fail
+            if error > 0:
+                category_status = 'status-error'
+            elif failed > 0:
+                category_status = 'status-fail'
+            else:
+                category_status = 'status-pass'
 
             html_parts.append(f"""
             <div class="category">
@@ -215,6 +222,7 @@ class HTMLReportGenerator:
                     <div class="category-stats">
                         <span class="stat stat-passed">{passed} passed</span>
                         <span class="stat stat-failed">{failed} failed</span>
+                        <span class="stat stat-error">{error} error</span>
                         <span class="stat stat-skipped">{skipped} skipped</span>
                         <span class="stat stat-total">{total} total</span>
                         <span class="toggle-icon">▼</span>
@@ -1317,6 +1325,10 @@ class HTMLReportGenerator:
             border-left: 4px solid #e74c3c;
         }
 
+        .category-header.status-error {
+            border-left: 4px solid #ff6b35;
+        }
+
         .category-header h3 {
             color: #2c3e50;
             font-size: 18px;
@@ -1343,6 +1355,11 @@ class HTMLReportGenerator:
         .stat-failed {
             background: #f8d7da;
             color: #721c24;
+        }
+
+        .stat-error {
+            background: #ffe5d9;
+            color: #d63e00;
         }
 
         .stat-skipped {
@@ -1440,6 +1457,11 @@ class HTMLReportGenerator:
             color: #721c24;
         }
 
+        .status-error .status-badge {
+            background: #ffe5d9;
+            color: #d63e00;
+        }
+
         .status-skip .status-badge {
             background: #fff3cd;
             color: #856404;
@@ -1461,6 +1483,10 @@ class HTMLReportGenerator:
 
         .status-fail .test-details {
             color: #721c24;
+        }
+
+        .status-error .test-details {
+            color: #d63e00;
         }
 
         /* Collapsible test details */
@@ -1584,6 +1610,11 @@ class HTMLReportGenerator:
             font-weight: 600;
         }
 
+        .detail-value.status-error {
+            color: #ff6b35;
+            font-weight: 600;
+        }
+
         .detail-value.status-skipped {
             color: #f39c12;
             font-weight: 600;
@@ -1603,6 +1634,12 @@ class HTMLReportGenerator:
             background: #fff5f5;
             border-color: #f8d7da;
             color: #721c24;
+        }
+
+        .status-reason.status-error {
+            background: #fff8f5;
+            border-color: #ffe5d9;
+            color: #d63e00;
         }
 
         .status-reason.status-skip {
@@ -1899,7 +1936,7 @@ class HTMLReportGenerator:
         }
 
         .status-error {
-            background-color: #dc3545;
+            background-color: #ff6b35;
             color: white;
         }
 
