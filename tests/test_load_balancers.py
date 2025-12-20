@@ -52,7 +52,7 @@ def get_ingress_load_balancer(cluster_data: ClusterData) -> dict:
 
 
 @pytest.mark.load_balancers
-def test_load_balancers_exist(cluster_data: ClusterData):
+def test_load_balancers_exist(cluster_data: ClusterData, request):
     """Cluster must have load balancers configured
 
     Why: Load balancers provide access to cluster API and application ingress.
@@ -80,6 +80,20 @@ def test_load_balancers_exist(cluster_data: ClusterData):
             resource_identifier=infra_id
         )
 
+        # Correlate CloudTrail events for missing load balancers
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        # Expected load balancer names based on infra_id
+        expected_lb_names = [f"{infra_id}-ext", f"{infra_id}-int"]
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=expected_lb_names,
+            resource_type="Load Balancer",
+            event_types=["Delete", "DeleteLoadBalancer"],
+            pytest_request=request
+        )
+
         pytest.fail(f"No load balancers found for cluster.\n\n{diagnostics}")
 
     print(f"\n✓ Found {len(lbs)} load balancers:")
@@ -90,7 +104,7 @@ def test_load_balancers_exist(cluster_data: ClusterData):
 
 
 @pytest.mark.load_balancers
-def test_api_load_balancer_exists(cluster_data: ClusterData):
+def test_api_load_balancer_exists(cluster_data: ClusterData, request):
     """API load balancer must exist
 
     Why: API load balancer provides access to the cluster API server.
@@ -129,6 +143,17 @@ def test_api_load_balancer_exists(cluster_data: ClusterData):
             api_service="elbv2",
             api_operation="describe_load_balancers",
             resource_identifier=expected_lb_name
+        )
+
+        # Correlate CloudTrail events for missing API load balancer
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[expected_lb_name],
+            resource_type="Load Balancer",
+            event_types=["Delete", "DeleteLoadBalancer"],
+            pytest_request=request
         )
 
         pytest.fail(f"API load balancer not found.\n\n{diagnostics}")
