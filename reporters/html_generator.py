@@ -567,7 +567,10 @@ class HTMLReportGenerator:
             # Extract test information
             nodeid = test.get('nodeid', '')
             test_name = nodeid.split('::')[-1] if '::' in nodeid else nodeid
-            test_id = f"test-{idx}-{test_name.replace('_', '-')}"
+            # Use nodeid-based ID for uniqueness and linkability
+            # Convert nodeid like 'tests/test_instances.py::test_control_plane_instances_running'
+            # to 'test-tests-test-instances-py-test-control-plane-instances-running'
+            test_id = 'test-' + nodeid.replace('/', '-').replace('.', '-').replace('::', '-').replace('_', '-')
 
             # Extract module and line number
             module_path = nodeid.split('::')[0] if '::' in nodeid else ''
@@ -954,6 +957,22 @@ class HTMLReportGenerator:
 
         return '\n'.join(html_parts)
 
+    def _generate_test_anchor_id(self, test_file: str, test_name: str) -> str:
+        """
+        Generate test anchor ID matching the format used in _generate_tests_html.
+
+        Args:
+            test_file: Test file path (e.g., 'tests/test_instances.py')
+            test_name: Test name (e.g., 'test_control_plane_instances_running')
+
+        Returns:
+            Anchor ID matching the test's HTML element ID
+        """
+        # Reconstruct nodeid format: 'tests/test_instances.py::test_control_plane_instances_running'
+        nodeid = f"{test_file}::{test_name}"
+        # Convert to ID format matching _generate_tests_html
+        return 'test-' + nodeid.replace('/', '-').replace('.', '-').replace('::', '-').replace('_', '-')
+
     def _generate_remediation_checklist_html(self, test: Dict[str, Any]) -> str:
         """
         Generate HTML for interactive remediation checklist.
@@ -1061,10 +1080,9 @@ class HTMLReportGenerator:
                 ''')
 
                 # Add test link if available
-                if can_validate and test_name:
-                    # Create anchor link to test (will need to match test ID in HTML)
-                    # Format: test-{idx}-{test_name.replace('_', '-')}
-                    test_anchor = test_name.replace('_', '-')
+                if can_validate and test_name and test_file:
+                    # Generate matching anchor ID using helper function
+                    test_anchor = self._generate_test_anchor_id(test_file, test_name)
                     html_parts.append(f'''
                                 <div style="font-size: 12px; margin-top: 4px;">
                                     <span style="background: {status_bg}; color: {status_color}; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 10px; margin-right: 6px;">{status_text}</span>
