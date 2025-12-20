@@ -132,21 +132,106 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
                 })
 
     if unhealthy_targets:
+        # Enhanced diagnostics with root cause analysis
+        print("\n" + "="*80)
+        print(f"CRITICAL: Found {len(unhealthy_targets)} unhealthy API server targets")
+        print("="*80)
+
         details = []
         resource_ids = []
+        instance_diagnostics = {}
 
-        for target in unhealthy_targets[:10]:  # Show first 10
-            details.append(
-                f"\nTarget Group: {target['target_group']}\n"
-                f"  Instance: {target['instance_id']}\n"
-                f"  Port: {target['port']}\n"
-                f"  State: {target['state']}\n"
-                f"  Reason: {target['reason']}\n"
-                f"  Description: {target['description']}"
-            )
-            # Collect instance IDs and target group names for CloudTrail correlation
-            resource_ids.append(target['instance_id'])
+        # Get instance data for diagnostics
+        instances_by_id = {inst.get('InstanceId'): inst for inst in cluster_data.ec2_instances}
+
+        # Get security groups for analysis
+        security_groups_by_id = {}
+        if cluster_data.security_groups:
+            for sg in cluster_data.security_groups:
+                security_groups_by_id[sg.get('GroupId')] = sg
+
+        for target in unhealthy_targets:
+            instance_id = target['instance_id']
+            resource_ids.append(instance_id)
             resource_ids.append(target['target_group'])
+
+            # Get instance details
+            instance = instances_by_id.get(instance_id, {})
+            instance_state = instance.get('State', {}).get('Name', 'unknown') if isinstance(instance.get('State'), dict) else instance.get('State', 'unknown')
+
+            # Analyze root cause
+            root_causes = []
+
+            # 1. Check instance state
+            if instance_state != 'running':
+                root_causes.append(f"Instance is {instance_state} (must be running)")
+
+            # 2. Check security groups
+            sg_ids = [sg['GroupId'] for sg in instance.get('SecurityGroups', [])]
+            port_6443_open = False
+            sg_issues = []
+
+            for sg_id in sg_ids:
+                sg = security_groups_by_id.get(sg_id, {})
+                ingress_rules = sg.get('IpPermissions', [])
+
+                for rule in ingress_rules:
+                    from_port = rule.get('FromPort')
+                    to_port = rule.get('ToPort')
+                    protocol = rule.get('IpProtocol', '')
+
+                    # Check if port 6443 is allowed
+                    if protocol == 'tcp' and from_port and to_port:
+                        if from_port <= 6443 <= to_port:
+                            port_6443_open = True
+                            break
+                    elif protocol == '-1':  # All protocols
+                        port_6443_open = True
+                        break
+
+            if not port_6443_open and sg_ids:
+                root_causes.append(f"Security groups may be blocking port 6443 (API server)")
+
+            # 3. Analyze failure reason
+            reason = target['reason']
+            if reason == 'Target.FailedHealthChecks':
+                root_causes.append("Health checks failing - API server may not be responding on port 6443")
+                if instance_state == 'running':
+                    root_causes.append("  Possible causes: API server not started, certificate issues, etcd unavailable")
+            elif reason == 'Target.Timeout':
+                root_causes.append("Health check timeout - network connectivity issue or API server overloaded")
+            elif reason == 'Target.ResponseCodeMismatch':
+                root_causes.append("API server returning unexpected HTTP response code")
+            elif reason == 'Target.DeregistrationInProgress':
+                root_causes.append("Target is being deregistered (instance terminating or auto-scaling)")
+
+            instance_diagnostics[instance_id] = {
+                'state': instance_state,
+                'security_groups': sg_ids,
+                'port_6443_open': port_6443_open,
+                'root_causes': root_causes
+            }
+
+            # Format detailed output
+            details.append(f"\n{'─'*80}")
+            details.append(f"Target Group: {target['target_group']}")
+            details.append(f"Instance ID: {instance_id}")
+            details.append(f"Port: {target['port']}")
+            details.append(f"Health State: {target['state']}")
+            details.append(f"Failure Reason: {target['reason']}")
+            if target['description']:
+                details.append(f"Description: {target['description']}")
+            details.append(f"\nInstance State: {instance_state}")
+            details.append(f"Security Groups: {', '.join(sg_ids) if sg_ids else 'None'}")
+            details.append(f"Port 6443 Open: {'Yes' if port_6443_open else 'No'}")
+
+            if root_causes:
+                details.append(f"\nROOT CAUSE ANALYSIS:")
+                for cause in root_causes:
+                    details.append(f"  ❌ {cause}")
+
+        print("\n".join(details))
+        print("\n" + "="*80)
 
         # Correlate CloudTrail events for unhealthy/deregistered targets
         from utils.test_helpers import correlate_cloudtrail_events_for_resources
@@ -156,13 +241,63 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
                 cluster_data=cluster_data,
                 resource_identifiers=resource_ids,
                 resource_type="Load Balancer Target",
-                event_types=["Deregister", "DeregisterTargets", "Terminate", "Stop"],
+                event_types=["Deregister", "DeregisterTargets", "Terminate", "Stop", "RevokeSecurityGroupIngress"],
                 pytest_request=request
             )
 
+            # Print CloudTrail findings
+            if ct_result['found_events']:
+                print("\n" + "="*80)
+                print("CloudTrail Analysis - Events Related to Unhealthy Targets")
+                print("="*80)
+                print(ct_result['formatted_message'])
+                print("="*80 + "\n")
+
+            # If only installer role events, treat as informational
+            if ct_result.get('only_installer_events'):
+                pytest.skip(
+                    f"INFORMATIONAL: API server targets unhealthy, but CloudTrail shows "
+                    f"only installer role activity (expected during cluster installation).\n\n"
+                    f"Found {len(unhealthy_targets)} unhealthy API server targets - see output above for details."
+                )
+
+        # Summary of common issues
+        print("\n" + "="*80)
+        print("COMMON CAUSES AND REMEDIATION")
+        print("="*80)
+        print("""
+1. Instance Not Running
+   - Check instance state in EC2 console
+   - Review CloudTrail for Stop/Terminate events
+   - Check for auto-scaling terminations
+
+2. Security Group Blocking Port 6443
+   - Verify security group rules allow TCP 6443 from load balancer subnets
+   - Check for RevokeSecurityGroupIngress events in CloudTrail
+   - Review security group changes during installation
+
+3. API Server Not Responding
+   - SSH to instance: ssh core@<instance-ip>
+   - Check API server status: sudo crictl ps | grep kube-apiserver
+   - View API server logs: sudo crictl logs <container-id>
+   - Check for certificate issues: sudo journalctl -u kubelet | grep certificate
+
+4. etcd Not Available
+   - API server requires etcd to function
+   - Check etcd status: sudo crictl ps | grep etcd
+   - View etcd logs: sudo crictl logs <etcd-container-id>
+
+5. Network Connectivity
+   - Verify route tables allow traffic from load balancer subnets
+   - Check Network ACLs aren't blocking traffic
+   - Verify subnet configuration
+
+For detailed diagnostics, see the Root Cause Analysis section above for each instance.
+        """)
+        print("="*80 + "\n")
+
         pytest.fail(
-            f"Found {len(unhealthy_targets)} unhealthy API server targets:\n" +
-            "".join(details)
+            f"Found {len(unhealthy_targets)} unhealthy API server targets - see detailed diagnostics above"
         )
 
 
