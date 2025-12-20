@@ -302,6 +302,71 @@ class HTMLReportGenerator:
 
         return 'Unknown status'
 
+    def _extract_full_failure_message(self, test: Dict[str, Any]) -> str:
+        """
+        Extract the FULL multi-line failure message from a failed test.
+
+        This shows complete details including all items in lists, unlike
+        _extract_status_reason() which only returns a one-line summary.
+
+        Returns empty string if test didn't fail or no details available.
+        """
+        outcome = test.get('outcome', 'unknown')
+        if outcome != 'failed':
+            return ''
+
+        call_info = test.get('call', {})
+        longrepr = call_info.get('longrepr', '')
+
+        if not longrepr:
+            return ''
+
+        # Look for AssertionError message (FULL multi-line version)
+        if 'AssertionError: ' in longrepr:
+            full_message = longrepr.split('AssertionError: ')[-1]
+            # Clean up: remove stack trace lines that start with specific patterns
+            lines = full_message.split('\n')
+            message_lines = []
+            for line in lines:
+                # Stop at stack trace markers
+                if line.startswith('Traceback') or line.startswith('  File ') or line.startswith('    '):
+                    break
+                message_lines.append(line)
+            return '\n'.join(message_lines).strip()
+
+        # Look for Failed: message (FULL multi-line version from pytest.fail())
+        if 'Failed: ' in longrepr:
+            full_message = longrepr.split('Failed: ')[-1]
+            # Clean up: remove stack trace lines
+            lines = full_message.split('\n')
+            message_lines = []
+            for line in lines:
+                # Stop at stack trace markers
+                if line.startswith('Traceback') or line.startswith('  File ') or line.startswith('    '):
+                    break
+                message_lines.append(line)
+            return '\n'.join(message_lines).strip()
+
+        # Look for E   lines and collect all consecutive ones
+        lines = longrepr.split('\n')
+        error_lines = []
+        in_error_section = False
+        for line in lines:
+            if line.startswith('E   '):
+                in_error_section = True
+                error_lines.append(line[4:])  # Remove 'E   ' prefix
+            elif in_error_section and not line.strip():
+                # Empty line, continue collecting
+                error_lines.append('')
+            elif in_error_section:
+                # Non-E line after E section started, stop
+                break
+
+        if error_lines:
+            return '\n'.join(error_lines).strip()
+
+        return ''
+
     def _generate_stack_trace_html(self, test: Dict[str, Any]) -> str:
         """Generate stack trace section for failed tests"""
         from html import escape
@@ -577,6 +642,21 @@ class HTMLReportGenerator:
             if outcome in ['failed', 'skipped']:
                 api_requests_html = self._generate_api_requests_html(test)
 
+            # Extract full failure message for failed tests
+            full_failure_message = ''
+            if outcome == 'failed':
+                full_msg = self._extract_full_failure_message(test)
+                if full_msg:
+                    # Escape for HTML and preserve formatting
+                    escaped_msg = escape(full_msg)
+                    full_failure_message = f'''
+                    <div class="detail-section failure-details-section">
+                        <h4 style="color: #e74c3c; margin-bottom: 10px;">⚠️ Failure Details</h4>
+                        <div style="background: #fff5f5; border-left: 4px solid #e74c3c; padding: 15px; margin: 10px 0; border-radius: 4px;">
+                            <pre style="white-space: pre-wrap; font-family: monospace; font-size: 13px; line-height: 1.6; margin: 0; color: #2c3e50;">{escaped_msg}</pre>
+                        </div>
+                    </div>'''
+
             html_parts.append(f"""
                         <tr class="{status_class}">
                             <td class="test-name">{display_name}</td>
@@ -615,9 +695,10 @@ class HTMLReportGenerator:
                                         <h4>Status Reason</h4>
                                         <div class="status-reason {status_class}">{escaped_status_reason}</div>
                                     </div>
-                                    {stack_trace_html}
+                                    {full_failure_message}
                                     {api_requests_html}
                                     {cloudtrail_html}
+                                    {stack_trace_html}
                                     {json_output_html}
                                     <div class="detail-section">
                                         <h4>Test Description</h4>
