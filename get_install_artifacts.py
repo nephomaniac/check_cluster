@@ -28,7 +28,20 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Callable
+
+# Import request tracker utility
+try:
+    from utils.request_tracker import RequestTracker
+except ImportError:
+    # If running standalone, try relative import
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        from utils.request_tracker import RequestTracker
+    except ImportError:
+        # Request tracker not available - continue without it
+        RequestTracker = None
 
 
 class Colors:
@@ -164,7 +177,7 @@ def format_aws_cli_command(service: str, operation: str, params: Dict[str, Any])
 class AWSCollector:
     """AWS data collection with retry logic and CLI command printing"""
 
-    def __init__(self, region: str = None, max_retries: int = 3, retry_delay: int = 1, debug: bool = False):
+    def __init__(self, region: str = None, max_retries: int = 3, retry_delay: int = 1, debug: bool = False, request_tracker=None):
         # Import boto3 here so help can be displayed without it
         try:
             import boto3
@@ -181,6 +194,7 @@ class AWSCollector:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.debug = debug
+        self.request_tracker = request_tracker
 
         # Track if we've already shown detailed UnauthorizedOperation error
         self._shown_detailed_auth_error = False
@@ -617,6 +631,60 @@ class AWSCollector:
 
         raise
 
+    def _tracked_request(self, service: str, operation: str, func: Callable, params: Dict = None, output_file: str = None) -> Optional[Any]:
+        """
+        Execute AWS API request with tracking.
+
+        Args:
+            service: AWS service name (e.g., "ec2", "elbv2")
+            operation: Operation name (e.g., "describe_instances")
+            func: Function to execute (e.g., self.ec2.describe_instances)
+            params: Parameters to pass to function
+            output_file: File where response will be saved (if applicable)
+
+        Returns:
+            API response or None if failed
+        """
+        params = params or {}
+        start_time = time.time()
+        success = False
+        error = None
+        response_code = None
+        result = None
+
+        try:
+            result = func(**params)
+            success = True
+            response_code = 200  # Successful API calls don't return HTTP codes in boto3, assume 200
+        except (self.ClientError, self.BotoCoreError) as e:
+            error = e
+            # Try to extract response code from exception
+            if hasattr(e, 'response') and isinstance(e.response, dict):
+                response_metadata = e.response.get('ResponseMetadata', {})
+                response_code = response_metadata.get('HTTPStatusCode')
+
+        finally:
+            # Track the request
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            if self.request_tracker:
+                self.request_tracker.track_request(
+                    service=service,
+                    operation=operation,
+                    success=success,
+                    duration_ms=duration_ms,
+                    response_code=response_code,
+                    error=error,
+                    parameters=params,
+                    output_file=output_file
+                )
+
+        # Re-raise error if one occurred
+        if error:
+            raise error
+
+        return result
+
     def _retry_request(self, func, service: str, operation: str, params: Dict, description: str):
         """Execute AWS request with retry logic"""
         for attempt in range(1, self.max_retries + 1):
@@ -665,7 +733,7 @@ class AWSCollector:
             f"fetch {description} for {instance_id}"
         )
 
-    def describe_vpcs(self, filters: List[Dict] = None, vpc_ids: List[str] = None) -> Dict:
+    def describe_vpcs(self, filters: List[Dict] = None, vpc_ids: List[str] = None, output_file: str = None) -> Dict:
         """Describe VPCs"""
         params = {}
         if filters:
@@ -675,7 +743,13 @@ class AWSCollector:
 
         print(format_aws_cli_command('ec2', 'describe-vpcs', params))
         try:
-            return self.ec2.describe_vpcs(**params)
+            return self._tracked_request(
+                service='ec2',
+                operation='describe_vpcs',
+                func=self.ec2.describe_vpcs,
+                params=params,
+                output_file=output_file
+            )
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'describe VPCs')
 
@@ -697,7 +771,7 @@ class AWSCollector:
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'describe DHCP options')
 
-    def describe_instances(self, filters: List[Dict] = None) -> Dict:
+    def describe_instances(self, filters: List[Dict] = None, output_file: str = None) -> Dict:
         """Describe EC2 instances"""
         params = {}
         if filters:
@@ -705,7 +779,13 @@ class AWSCollector:
 
         print(format_aws_cli_command('ec2', 'describe-instances', params))
         try:
-            return self.ec2.describe_instances(**params)
+            return self._tracked_request(
+                service='ec2',
+                operation='describe_instances',
+                func=self.ec2.describe_instances,
+                params=params,
+                output_file=output_file
+            )
         except (self.ClientError, self.BotoCoreError) as e:
             self._handle_aws_error(e, 'describe EC2 instances')
 
@@ -1030,42 +1110,52 @@ class AWSCollector:
     def get_iam_role(self, role_name: str) -> Dict:
         """Get IAM role details"""
         print(f"aws iam get-role --role-name {role_name} --output json")
-        try:
-            return self.iam.get_role(RoleName=role_name)
-        except (self.ClientError, self.BotoCoreError) as e:
-            self._handle_aws_error(e, f'get IAM role {role_name}')
+        return self._tracked_request(
+            service='iam',
+            operation='get_role',
+            func=self.iam.get_role,
+            params={'RoleName': role_name}
+        )
 
     def list_role_policies(self, role_name: str) -> Dict:
         """List inline policies for IAM role"""
         print(f"aws iam list-role-policies --role-name {role_name} --output json")
-        try:
-            return self.iam.list_role_policies(RoleName=role_name)
-        except (self.ClientError, self.BotoCoreError) as e:
-            self._handle_aws_error(e, f'list role policies for {role_name}')
+        return self._tracked_request(
+            service='iam',
+            operation='list_role_policies',
+            func=self.iam.list_role_policies,
+            params={'RoleName': role_name}
+        )
 
     def list_attached_role_policies(self, role_name: str) -> Dict:
         """List attached managed policies for IAM role"""
         print(f"aws iam list-attached-role-policies --role-name {role_name} --output json")
-        try:
-            return self.iam.list_attached_role_policies(RoleName=role_name)
-        except (self.ClientError, self.BotoCoreError) as e:
-            self._handle_aws_error(e, f'list attached role policies for {role_name}')
+        return self._tracked_request(
+            service='iam',
+            operation='list_attached_role_policies',
+            func=self.iam.list_attached_role_policies,
+            params={'RoleName': role_name}
+        )
 
     def list_open_id_connect_providers(self) -> Dict:
         """List OIDC providers"""
         print("aws iam list-open-id-connect-providers --output json")
-        try:
-            return self.iam.list_open_id_connect_providers()
-        except (self.ClientError, self.BotoCoreError) as e:
-            self._handle_aws_error(e, 'list OIDC providers')
+        return self._tracked_request(
+            service='iam',
+            operation='list_open_id_connect_providers',
+            func=self.iam.list_open_id_connect_providers,
+            params={}
+        )
 
     def get_open_id_connect_provider(self, oidc_provider_arn: str) -> Dict:
         """Get OIDC provider details"""
         print(f"aws iam get-open-id-connect-provider --open-id-connect-provider-arn {oidc_provider_arn} --output json")
-        try:
-            return self.iam.get_open_id_connect_provider(OpenIDConnectProviderArn=oidc_provider_arn)
-        except (self.ClientError, self.BotoCoreError) as e:
-            self._handle_aws_error(e, f'get OIDC provider {oidc_provider_arn}')
+        return self._tracked_request(
+            service='iam',
+            operation='get_open_id_connect_provider',
+            func=self.iam.get_open_id_connect_provider,
+            params={'OpenIDConnectProviderArn': oidc_provider_arn}
+        )
 
 
 class ClusterDataCollector:
@@ -1109,6 +1199,16 @@ class ClusterDataCollector:
         # (to use cluster region if not provided via CLI)
         self.aws = None
 
+        # Request tracker for logging AWS API calls
+        self.request_tracker = None
+        if RequestTracker:
+            # Will be fully initialized with infra_id after cluster data is fetched
+            self.request_tracker = RequestTracker(
+                cluster_id=self.cluster_id,
+                infra_id="unknown",  # Will be updated after cluster data is fetched
+                output_dir=self.work_dir / "sources" / "aws"
+            )
+
         # Runtime variables
         self.capture_start = None
         self.capture_end = None
@@ -1121,6 +1221,29 @@ class ClusterDataCollector:
 
         # Track failed requests with empty results
         self.failed_empty_requests = []
+
+    @staticmethod
+    def _parse_datetime_flexible(dt_string: str) -> datetime:
+        """
+        Parse datetime string that may or may not include microseconds.
+
+        Handles formats:
+        - 2025-12-15T16:27:27Z (without microseconds)
+        - 2025-12-15T16:27:27.903034Z (with microseconds)
+
+        Returns:
+            datetime object with UTC timezone
+        """
+        formats = [
+            '%Y-%m-%dT%H:%M:%S.%fZ',  # With microseconds
+            '%Y-%m-%dT%H:%M:%SZ'      # Without microseconds
+        ]
+        for fmt in formats:
+            try:
+                return datetime.strptime(dt_string, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        raise ValueError(f"Unable to parse datetime string: {dt_string}. Expected format: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fZ")
 
     def _setup_directory_structure(self):
         """
@@ -1266,6 +1389,21 @@ class ClusterDataCollector:
         # Report any failed empty requests
         self._report_empty_request_failures()
 
+        # Save request tracking log
+        self._save_request_log()
+
+    def _save_request_log(self):
+        """Save AWS API request tracking log"""
+        if not self.request_tracker:
+            return
+
+        try:
+            self.request_tracker.save()
+            Colors.green(f"\n✓ API request log saved: {self.request_tracker.output_file}")
+            print(self.request_tracker)  # Print summary
+        except Exception as e:
+            Colors.perr(f"⚠ Failed to save request log: {e}")
+
     def _report_empty_request_failures(self):
         """Report summary of failed requests that returned empty results"""
         if not self.failed_empty_requests:
@@ -1295,8 +1433,21 @@ class ClusterDataCollector:
             Colors.perr("Error: Region not determined. Cannot initialize AWS collector.")
             sys.exit(1)
 
-        # Initialize AWS collector with the region
-        self.aws = AWSCollector(region=self.region, debug=self.debug)
+        # Update request tracker with full metadata now that we have infra_id
+        if self.request_tracker and self.infra_id:
+            self.request_tracker.metadata.infra_id = self.infra_id
+            self.request_tracker.metadata.aws_region = self.region
+            # Try to get AWS account ID
+            try:
+                import boto3
+                sts = boto3.client('sts', region_name=self.region)
+                identity = sts.get_caller_identity()
+                self.request_tracker.metadata.aws_account_id = identity.get('Account', 'unknown')
+            except Exception:
+                pass  # Not critical if we can't get account ID
+
+        # Initialize AWS collector with the region and request tracker
+        self.aws = AWSCollector(region=self.region, debug=self.debug, request_tracker=self.request_tracker)
 
         # Get cluster region for comparison
         cluster_region = self.cluster_data.get('region', {}).get('id') if self.cluster_data else None
@@ -1506,7 +1657,7 @@ class ClusterDataCollector:
             # Determine start date
             if self.start_date:
                 self.capture_start = self.start_date
-                start_dt = datetime.strptime(self.capture_start, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                start_dt = self._parse_datetime_flexible(self.capture_start)
                 end_dt = start_dt + capture_window
                 self.capture_end = end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
                 Colors.blue(f"Using provided start date: {self.capture_start}")
@@ -1573,8 +1724,8 @@ class ClusterDataCollector:
                     fetch_end = new_end
 
         # Fetch metrics from AWS
-        start_dt = datetime.strptime(fetch_start, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-        end_dt = datetime.strptime(fetch_end, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+        start_dt = self._parse_datetime_flexible(fetch_start)
+        end_dt = self._parse_datetime_flexible(fetch_end)
 
         try:
             metrics_output = self.aws.get_metric_statistics(
@@ -2746,8 +2897,8 @@ class ClusterDataCollector:
             Colors.blue(f"Gathering cloudtrail logs from '{self.capture_start}' to '{self.capture_end}'...")
 
             try:
-                start_dt = datetime.strptime(self.capture_start, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                end_dt = datetime.strptime(self.capture_end, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                start_dt = self._parse_datetime_flexible(self.capture_start)
+                end_dt = self._parse_datetime_flexible(self.capture_end)
 
                 events = self.aws.lookup_events(start_dt, end_dt)
 
@@ -2955,8 +3106,23 @@ Iterating over LBs found in {lb_all_file} to get tag associations...
                 tg_arn = tg.get('TargetGroupArn')
                 tg_name = tg.get('TargetGroupName', 'unknown')
 
-                # Check if target group belongs to cluster
-                if self.infra_id not in tg_name:
+                # Check if target group belongs to cluster by checking associated load balancers
+                # Target groups are associated with LBs, so check if any LB ARN contains the infra_id
+                lb_arns = tg.get('LoadBalancerArns', [])
+                belongs_to_cluster = False
+
+                for lb_arn in lb_arns:
+                    # LB ARN format: arn:aws:elasticloadbalancing:region:account:loadbalancer/net/NAME/id
+                    # Check if the LB name (after last /) contains our infra_id
+                    if self.infra_id in lb_arn:
+                        belongs_to_cluster = True
+                        break
+
+                # Also check if target group name itself contains infra_id (backwards compatibility)
+                if self.infra_id in tg_name:
+                    belongs_to_cluster = True
+
+                if not belongs_to_cluster:
                     continue
 
                 tg_health_file = f"{self.file_prefix}_{tg_name}_target_health.json"

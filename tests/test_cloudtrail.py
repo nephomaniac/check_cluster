@@ -68,7 +68,36 @@ def test_cloudtrail_events_exist(cluster_data: ClusterData):
 
 @pytest.mark.cloudtrail
 def test_no_security_group_revocations(cluster_data: ClusterData):
-    """Security group rules should not be revoked (indicates potential issues)"""
+    """Security group rules should not be revoked (indicates potential issues)
+
+    Why: Security group rule revocations during cluster installation can break
+    critical network communication between cluster components.
+
+    Failure indicates: Security group rules were revoked during the cluster
+    installation window. This can cause:
+    - Loss of API server access (port 6443)
+    - Loss of Machine Config Server access (port 22623)
+    - Loss of etcd communication (ports 2379, 2380)
+    - Loss of kubelet access (port 10250)
+    - Loss of overlay network connectivity (ports 4789, 6081)
+
+    Success indicates: No security group rules were revoked during installation.
+
+    Remediation:
+      Review the revoked rules details in the failure output to understand what
+      was removed. Check if any critical ports for cluster communication were affected.
+
+      To restore missing critical rules:
+        $ aws ec2 authorize-security-group-ingress --group-id <sg-id> \\
+            --protocol tcp --port 6443 --source-group <sg-id> \\
+            --region <region>
+
+      To view current security group rules:
+        $ aws ec2 describe-security-groups --group-ids <sg-id> \\
+            --region <region>
+
+    Severity: HIGH - Can break cluster communication
+    """
     if not cluster_data.cloudtrail_events:
         pytest.skip("No CloudTrail events available")
 
@@ -76,11 +105,64 @@ def test_no_security_group_revocations(cluster_data: ClusterData):
 
     if revoke_events:
         details = []
-        for event in revoke_events[:5]:  # Show first 5
+        for event in revoke_events[:10]:  # Show first 10
             event_name = event.get('EventName', 'unknown')
             event_time = event.get('EventTime', 'unknown')
             user = event.get('Username', 'unknown')
-            details.append(f"{event_time} - {event_name} by {user}")
+
+            # Parse CloudTrailEvent JSON to get request parameters
+            import json
+            cloud_trail_event_str = event.get('CloudTrailEvent', '{}')
+            try:
+                cloud_trail_event = json.loads(cloud_trail_event_str)
+                request_params = cloud_trail_event.get('requestParameters', {})
+
+                # Extract details about what was revoked
+                group_id = request_params.get('groupId', 'unknown')
+                ip_permissions = request_params.get('ipPermissions', {})
+
+                # Build a summary of what was revoked
+                revoked_details = []
+                for item in ip_permissions.get('items', []):
+                    protocol = item.get('ipProtocol', 'unknown')
+                    from_port = item.get('fromPort', 'N/A')
+                    to_port = item.get('toPort', 'N/A')
+
+                    # Get CIDR ranges
+                    cidrs = []
+                    for ip_range in item.get('ipRanges', {}).get('items', []):
+                        cidrs.append(ip_range.get('cidrIp', 'unknown'))
+
+                    # Get security groups
+                    groups = []
+                    for group in item.get('groups', {}).get('items', []):
+                        groups.append(group.get('groupId', 'unknown'))
+
+                    if protocol == '-1':
+                        rule_desc = "All protocols"
+                    else:
+                        rule_desc = f"Protocol {protocol}, Ports {from_port}-{to_port}"
+
+                    if cidrs:
+                        rule_desc += f", CIDR: {', '.join(cidrs)}"
+                    if groups:
+                        rule_desc += f", Source SG: {', '.join(groups)}"
+
+                    revoked_details.append(rule_desc)
+
+                if revoked_details:
+                    details.append(
+                        f"{event_time} - {event_name} by {user}\n" +
+                        f"  Security Group: {group_id}\n" +
+                        f"  Revoked Rules:\n    - " + "\n    - ".join(revoked_details)
+                    )
+                else:
+                    details.append(
+                        f"{event_time} - {event_name} by {user} (Group: {group_id})"
+                    )
+            except (json.JSONDecodeError, KeyError) as e:
+                # Fallback to basic info if parsing fails
+                details.append(f"{event_time} - {event_name} by {user}")
 
         pytest.fail(
             f"Found {len(revoke_events)} security group revoke events:\n" +

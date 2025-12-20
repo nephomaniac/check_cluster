@@ -35,6 +35,7 @@ def run_pytest(cluster_dir: Path, json_output: Path, html_output: Path, verbose:
         f'--json-report',
         f'--json-report-file={json_output}',
         '--json-report-indent=2',
+        # NOTE: user_properties (API errors, CloudTrail, etc.) are included by default in JSON report
         f'--html={html_output}',
         '--self-contained-html',
     ]
