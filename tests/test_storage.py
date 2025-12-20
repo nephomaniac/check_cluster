@@ -15,7 +15,7 @@ from models.cluster import ClusterData
 
 
 @pytest.mark.storage
-def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
+def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str, request):
     """Cluster should have EBS volumes for instances
 
     Why: EBS volumes provide persistent storage for cluster nodes and etcd data.
@@ -38,6 +38,17 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
             api_service="ec2",
             api_operation="describe_volumes",
             resource_identifier=infra_id
+        )
+
+        # Correlate CloudTrail events for deleted volumes
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[infra_id],  # Search by infra_id tag
+            resource_type="EBS Volume",
+            event_types=["Delete", "DeleteVolume", "DetachVolume"],
+            pytest_request=request
         )
 
         pytest.fail(f"No EBS volumes data found.\n\n{diagnostics}")
@@ -81,6 +92,17 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str):
             api_service="ec2",
             api_operation="describe_volumes",
             resource_identifier=infra_id
+        )
+
+        # Correlate CloudTrail events for deleted volumes
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[infra_id],  # Search by infra_id tag
+            resource_type="EBS Volume",
+            event_types=["Delete", "DeleteVolume", "DetachVolume"],
+            pytest_request=request
         )
 
         print(f"\n✗ No EBS volumes found for cluster {infra_id}")
@@ -201,7 +223,7 @@ def test_ebs_volumes_encrypted(cluster_data: ClusterData, infra_id: str):
 
 
 @pytest.mark.storage
-def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str):
+def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str, request):
     """Control plane (master) nodes should have dedicated etcd volumes"""
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
     instances_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
@@ -321,11 +343,30 @@ def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str
         print(f"  - Cluster is in degraded state")
         print(f"  - Volumes exist but attachment state is incorrect")
 
+        # Correlate CloudTrail events for detached/deleted volumes
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        # Collect instance IDs and volume IDs for correlation
+        resource_ids = []
+        for instance in master_instances:
+            resource_ids.append(instance.get('InstanceId'))
+        for vol in cluster_volumes:
+            resource_ids.append(vol.get('VolumeId'))
+
+        if resource_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=resource_ids,
+                resource_type="EBS Volume / Master Instance",
+                event_types=["Delete", "DeleteVolume", "Detach", "DetachVolume", "Terminate", "Stop"],
+                pytest_request=request
+            )
+
     assert len(issues) == 0, f"Master volume issues: {'; '.join(issues)}"
 
 
 @pytest.mark.storage
-def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str):
+def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str, request):
     """Volume attachments should be in 'attached' state"""
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
@@ -345,6 +386,7 @@ def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str):
 
     bad_attachments = []
     all_attachments = []
+    resource_ids = []  # For CloudTrail correlation
 
     for vol in cluster_volumes:
         vol_id = vol['VolumeId']
@@ -363,6 +405,8 @@ def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str):
 
             if state != 'attached':
                 bad_attachments.append(f"{vol_id} -> {instance_id} (state: {state})")
+                resource_ids.append(vol_id)
+                resource_ids.append(instance_id)
 
     if len(bad_attachments) == 0:
         print(f"\n✓ All {len(all_attachments)} volume attachments in attached state:")
@@ -370,6 +414,18 @@ def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str):
     else:
         print(f"\n✗ Volume attachments not in attached state:")
         print(json.dumps([a for a in all_attachments if a["State"] != 'attached'], indent=2))
+
+        # Correlate CloudTrail events for detached volumes
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        if resource_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=resource_ids,
+                resource_type="EBS Volume Attachment",
+                event_types=["Detach", "DetachVolume", "Terminate", "Stop"],
+                pytest_request=request
+            )
 
     assert len(bad_attachments) == 0, \
         f"Volume attachments not in 'attached' state: {', '.join(bad_attachments)}"
