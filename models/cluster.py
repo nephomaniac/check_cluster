@@ -27,6 +27,7 @@ class ClusterData:
     vpcs: Dict[str, Any] = field(default_factory=dict)
     route53_zones: Dict[str, Any] = field(default_factory=dict)
     cloudtrail_events: List[Dict[str, Any]] = field(default_factory=list)
+    api_requests: Dict[str, Any] = field(default_factory=dict)  # AWS API request tracking log
 
     # Additional data
     cluster_context: Dict[str, Any] = field(default_factory=dict)
@@ -138,7 +139,22 @@ class ClusterData:
         # Try to get from VPC data
         vpcs = self.vpcs.get('Vpcs', [])
         if vpcs:
-            return vpcs[0].get('CidrBlock')
+            vpc = vpcs[0]
+            # First try the top-level CidrBlock
+            cidr = vpc.get('CidrBlock')
+            if cidr:
+                return cidr
+
+            # If not present, try CidrBlockAssociationSet
+            cidr_associations = vpc.get('CidrBlockAssociationSet', [])
+            if cidr_associations:
+                # Return the first associated CIDR block that is in 'associated' state
+                for assoc in cidr_associations:
+                    state = assoc.get('CidrBlockState', {}).get('State')
+                    if state == 'associated':
+                        return assoc.get('CidrBlock')
+                # If no associated state found, return the first one
+                return cidr_associations[0].get('CidrBlock')
 
         return None
 
@@ -283,3 +299,104 @@ class ClusterData:
         finally:
             # Re-enable tracking
             object.__setattr__(self, '_tracking_enabled', True)
+
+    # =========================================================================
+    # API Request Log Helper Methods
+    # =========================================================================
+
+    def get_api_requests(self) -> List[Dict[str, Any]]:
+        """
+        Get all API requests from the request log.
+
+        Returns:
+            List of API request dictionaries, or empty list if no request log
+        """
+        if not self.api_requests:
+            return []
+        return self.api_requests.get('requests', [])
+
+    def get_failed_requests(self, service: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get all failed API requests, optionally filtered by service.
+
+        Args:
+            service: Filter by AWS service (e.g., "ec2", "iam", "elbv2")
+
+        Returns:
+            List of failed requests
+        """
+        requests = self.get_api_requests()
+        failed = [req for req in requests if not req.get('success', False)]
+
+        if service:
+            failed = [req for req in failed if req.get('service') == service]
+
+        return failed
+
+    def get_permission_errors(self) -> List[Dict[str, Any]]:
+        """
+        Get all API requests that failed due to permission issues.
+
+        Returns:
+            List of requests that failed with permission/authorization errors
+        """
+        requests = self.get_api_requests()
+        permission_errors = []
+
+        for req in requests:
+            if not req.get('success', False) and req.get('error'):
+                error = req['error']
+                error_code = error.get('code', '').lower()
+                error_type = error.get('type', '').lower()
+
+                # Check for permission-related error codes
+                if any(perm in error_code or perm in error_type for perm in
+                       ['unauthorized', 'accessdenied', 'forbidden', 'permission']):
+                    permission_errors.append(req)
+
+        return permission_errors
+
+    def get_request_for_operation(self, operation: str, service: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent request for a specific operation.
+
+        Args:
+            operation: AWS operation name (e.g., "describe_instances", "get_role")
+            service: Optional service filter (e.g., "ec2", "iam")
+
+        Returns:
+            Most recent request dict for that operation, or None
+        """
+        requests = self.get_api_requests()
+
+        # Filter by operation
+        matching = [req for req in requests if req.get('operation') == operation]
+
+        # Further filter by service if specified
+        if service:
+            matching = [req for req in matching if req.get('service') == service]
+
+        # Return most recent (last in list)
+        return matching[-1] if matching else None
+
+    def get_request_summary(self) -> Dict[str, Any]:
+        """
+        Get summary statistics from the API request log.
+
+        Returns:
+            Summary dict with counts, or empty dict if no request log
+        """
+        if not self.api_requests:
+            return {}
+        return self.api_requests.get('summary', {})
+
+    def get_collection_metadata(self) -> Dict[str, Any]:
+        """
+        Get metadata about when and how data was collected.
+
+        Returns:
+            Metadata dict with collection timestamps and identifiers
+        """
+        if not self.api_requests:
+            return {}
+        return self.api_requests.get('collection_metadata', {})

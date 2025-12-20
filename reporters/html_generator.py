@@ -338,8 +338,12 @@ class HTMLReportGenerator:
 
         return html
 
-    def _extract_json_output(self, test: Dict[str, Any]) -> List[str]:
-        """Extract JSON blocks from test stdout"""
+    def _extract_json_output(self, test: Dict[str, Any]) -> List[Dict[str, str]]:
+        """
+        Extract JSON blocks with their headers from test stdout.
+
+        Returns list of dicts with 'header' and 'json' keys.
+        """
         call_info = test.get('call', {})
         stdout = call_info.get('stdout', '')
 
@@ -349,12 +353,32 @@ class HTMLReportGenerator:
         json_blocks = []
         lines = stdout.split('\n')
         current_json = []
+        current_header = []
         in_json = False
+        in_header = False
         bracket_depth = 0
         brace_depth = 0
 
-        for line in lines:
+        for i, line in enumerate(lines):
             stripped = line.strip()
+
+            # Detect header separator line (starts with ─)
+            if '─' * 10 in line and not in_json:
+                # Start or end of header section
+                if not in_header:
+                    # Beginning of header section
+                    in_header = True
+                    current_header = []
+                else:
+                    # End of header section - next should be JSON
+                    in_header = False
+                continue
+
+            # Collect header lines (between ─ separators)
+            if in_header:
+                if stripped:  # Only collect non-empty lines
+                    current_header.append(stripped)
+                continue
 
             # Detect start of JSON (array or object at start of line)
             if not in_json and (stripped.startswith('[') or stripped.startswith('{')):
@@ -374,19 +398,93 @@ class HTMLReportGenerator:
                     # Try to parse the complete JSON
                     try:
                         json_str = '\n'.join(current_json)
-                        json.loads(json_str)
-                        # Valid JSON - save it
-                        json_blocks.append(json_str)
+                        parsed_json = json.loads(json_str)
+
+                        # Determine if this is CloudTrail data
+                        is_cloudtrail = self._is_cloudtrail_data(current_header, parsed_json)
+
+                        # Save JSON block with header
+                        json_blocks.append({
+                            'header': '\n'.join(current_header) if current_header else '',
+                            'json': json_str,
+                            'parsed': parsed_json,
+                            'is_cloudtrail': is_cloudtrail
+                        })
+
                         in_json = False
                         current_json = []
+                        current_header = []
                     except json.JSONDecodeError:
                         # Invalid JSON, reset and continue
                         in_json = False
                         current_json = []
+                        current_header = []
                         bracket_depth = 0
                         brace_depth = 0
 
         return json_blocks
+
+    def _is_cloudtrail_data(self, header_lines: List[str], parsed_json: Any) -> bool:
+        """Determine if JSON data is CloudTrail events"""
+        # Check header for "CLOUDTRAIL" keyword
+        header_text = '\n'.join(header_lines).upper()
+        if 'CLOUDTRAIL' in header_text:
+            return True
+
+        # Check if JSON structure matches CloudTrail events
+        if isinstance(parsed_json, list) and len(parsed_json) > 0:
+            first_item = parsed_json[0]
+            if isinstance(first_item, dict):
+                # CloudTrail events have EventName, EventTime, Username fields
+                cloudtrail_fields = ['EventName', 'EventTime', 'Username']
+                if all(field in first_item for field in cloudtrail_fields):
+                    return True
+
+        return False
+
+    def _format_cloudtrail_simplified(self, events: List[Dict[str, Any]]) -> str:
+        """Format CloudTrail events to show only: eventName, username, date, result code"""
+        from html import escape
+
+        if not events:
+            return '<p style="color: #666; font-style: italic;">No CloudTrail events found</p>'
+
+        html = '<table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px;">'
+        html += '<thead>'
+        html += '<tr style="background: #34495e; color: #ffffff;">'
+        html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd;">Event Name</th>'
+        html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd;">Username</th>'
+        html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd;">Date/Time</th>'
+        html += '<th style="padding: 8px; text-align: left; border: 1px solid #ddd;">Result</th>'
+        html += '</tr>'
+        html += '</thead>'
+        html += '<tbody>'
+
+        for event in events:
+            event_name = event.get('EventName', 'N/A')
+            username = event.get('Username', 'N/A')
+            event_time = event.get('EventTime', 'N/A')
+
+            # Result code - check ErrorCode or assume success
+            error_code = event.get('ErrorCode', '')
+            if error_code:
+                result = f'Error: {error_code}'
+                result_color = '#e74c3c'
+            else:
+                result = 'Success'
+                result_color = '#27ae60'
+
+            html += '<tr style="background: white;">'
+            html += f'<td style="padding: 8px; border: 1px solid #ddd; font-family: monospace;">{escape(str(event_name))}</td>'
+            html += f'<td style="padding: 8px; border: 1px solid #ddd;">{escape(str(username))}</td>'
+            html += f'<td style="padding: 8px; border: 1px solid #ddd;">{escape(str(event_time))}</td>'
+            html += f'<td style="padding: 8px; border: 1px solid #ddd; color: {result_color}; font-weight: 600;">{escape(result)}</td>'
+            html += '</tr>'
+
+        html += '</tbody>'
+        html += '</table>'
+
+        return html
 
     def _generate_tests_html(self, tests: List[Dict[str, Any]]) -> str:
         """Generate HTML for test results with collapsible details"""
@@ -436,10 +534,28 @@ class HTMLReportGenerator:
             json_output_html = ''
             if json_blocks:
                 json_output_html = '<div class="detail-section"><h4>Test Output</h4>'
-                for json_block in json_blocks:
-                    # Escape HTML entities
-                    escaped_json = escape(json_block)
-                    json_output_html += f'<pre class="json-output"><code>{escaped_json}</code></pre>'
+                for idx, block in enumerate(json_blocks):
+                    # Each block is a dict with 'header', 'json', 'parsed', 'is_cloudtrail'
+                    header = block.get('header', '')
+                    json_str = block.get('json', '')
+                    parsed = block.get('parsed')
+                    is_cloudtrail = block.get('is_cloudtrail', False)
+
+                    # Add header if present
+                    if header:
+                        json_output_html += f'''
+                        <div style="background: #e8f4f8; border-left: 4px solid #3498db; padding: 12px; margin: 15px 0 5px 0; border-radius: 4px;">
+                            <div style="font-weight: 600; color: #2c3e50; font-size: 13px; white-space: pre-wrap;">{escape(header)}</div>
+                        </div>'''
+
+                    # Display CloudTrail data in simplified table format
+                    if is_cloudtrail and isinstance(parsed, list):
+                        json_output_html += self._format_cloudtrail_simplified(parsed)
+                    else:
+                        # Display regular JSON
+                        escaped_json = escape(json_str)
+                        json_output_html += f'<pre class="json-output"><code>{escaped_json}</code></pre>'
+
                 json_output_html += '</div>'
 
             # Escape status reason for safe HTML display
@@ -450,6 +566,16 @@ class HTMLReportGenerator:
 
             # Generate sources section
             sources_html = self._generate_sources_html(test)
+
+            # Generate CloudTrail events section (for failed/skipped tests)
+            cloudtrail_html = ''
+            if outcome in ['failed', 'skipped']:
+                cloudtrail_html = self._generate_cloudtrail_events_html(test)
+
+            # Generate API requests section (for failed/skipped tests)
+            api_requests_html = ''
+            if outcome in ['failed', 'skipped']:
+                api_requests_html = self._generate_api_requests_html(test)
 
             html_parts.append(f"""
                         <tr class="{status_class}">
@@ -490,6 +616,8 @@ class HTMLReportGenerator:
                                         <div class="status-reason {status_class}">{escaped_status_reason}</div>
                                     </div>
                                     {stack_trace_html}
+                                    {api_requests_html}
+                                    {cloudtrail_html}
                                     {json_output_html}
                                     <div class="detail-section">
                                         <h4>Test Description</h4>
@@ -586,8 +714,249 @@ class HTMLReportGenerator:
 
         return html
 
+    def _generate_cloudtrail_events_html(self, test: Dict[str, Any]) -> str:
+        """
+        Generate HTML for CloudTrail events section.
+
+        This should be called for failed/skipped tests to show related CloudTrail events.
+
+        Args:
+            test: Test result dictionary from JSON report
+
+        Returns:
+            HTML string for CloudTrail events section
+        """
+        from html import escape
+        import os
+
+        # Check if test has CloudTrail data
+        user_properties = test.get('user_properties', [])
+        cloudtrail_available = False
+        cloudtrail_events = []
+        cloudtrail_event_count = 0
+
+        # Extract CloudTrail info from user_properties
+        if user_properties and isinstance(user_properties, list):
+            for prop in user_properties:
+                if isinstance(prop, dict):
+                    if 'cloudtrail_available' in prop:
+                        cloudtrail_available = prop['cloudtrail_available']
+                    elif 'cloudtrail_event_count' in prop:
+                        cloudtrail_event_count = prop['cloudtrail_event_count']
+                    elif 'cloudtrail_events' in prop:
+                        cloudtrail_events = prop['cloudtrail_events']
+
+        if not cloudtrail_available:
+            return ''  # No CloudTrail data available
+
+        # If no specific events but CloudTrail is available, show availability message
+        if not cloudtrail_events:
+            if cloudtrail_event_count > 0:
+                return f'''
+                <div class="cloudtrail-section">
+                    <div class="cloudtrail-header">
+                        <span class="cloudtrail-icon">📋</span>
+                        <span class="cloudtrail-available-message">
+                            CloudTrail data available ({cloudtrail_event_count} events collected)
+                            but no specific resource correlation performed by test.
+                        </span>
+                    </div>
+                </div>
+                '''
+            return ''
+
+        # Generate HTML for CloudTrail events
+        html_parts = []
+
+        html_parts.append(f'''
+        <div class="cloudtrail-section">
+            <button class="cloudtrail-toggle" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
+                <span class="cloudtrail-icon">📋</span>
+                Related CloudTrail Events ({len(cloudtrail_events)})
+                <span class="toggle-indicator">▼</span>
+            </button>
+            <div class="cloudtrail-content" style="display: none;">
+        ''')
+
+        # Add each event
+        for i, event in enumerate(cloudtrail_events):
+            category = event.get('category', 'Other')
+            summary = event.get('summary', 'No summary available')
+            event_name = event.get('event_name', 'Unknown')
+            event_time = event.get('event_time', 'Unknown')
+            source_file = event.get('file', '')
+            event_index = event.get('index', 0)
+
+            # Determine badge class based on category
+            badge_class = {
+                'Creation Failed': 'badge-creation-failed',
+                'Deletion': 'badge-deletion',
+                'Creation': 'badge-creation',
+                'Modification': 'badge-modification',
+                'Authorization': 'badge-authorization',
+                'Revocation': 'badge-revocation',
+                'Other': 'badge-other'
+            }.get(category, 'badge-other')
+
+            # Create link to event in CloudTrail file
+            event_link = ''
+            if source_file:
+                # Create anchor link to specific event
+                # This assumes the CloudTrail file will be viewable
+                filename = os.path.basename(source_file)
+                event_link = f'<a href="{filename}#event-{event_index}" class="event-link" title="View full event in {filename}">View Full Event →</a>'
+
+            html_parts.append(f'''
+                <div class="cloudtrail-event">
+                    <div class="event-header">
+                        <span class="badge {badge_class}">{escape(category)}</span>
+                        <strong>{escape(event_name)}</strong>
+                        <span class="event-time">{escape(str(event_time))}</span>
+                    </div>
+                    <div class="event-summary">{escape(summary)}</div>
+                    {f'<div class="event-link-container">{event_link}</div>' if event_link else ''}
+                </div>
+            ''')
+
+        html_parts.append('''
+            </div>
+        </div>
+        ''')
+
+        return '\n'.join(html_parts)
+
+    def _generate_api_requests_html(self, test: Dict[str, Any]) -> str:
+        """
+        Generate HTML for API request errors section.
+
+        Shows API requests that failed during data collection, with error codes,
+        timestamps, and remediation guidance.
+
+        Args:
+            test: Test result dictionary from JSON report
+
+        Returns:
+            HTML string for API requests section
+        """
+        from html import escape
+
+        # Check if test has API request error data
+        user_properties = test.get('user_properties', [])
+        api_request_errors = []
+
+        # Extract API request errors from user_properties
+        if user_properties and isinstance(user_properties, list):
+            for prop in user_properties:
+                if isinstance(prop, dict) and 'api_request_errors' in prop:
+                    api_request_errors = prop['api_request_errors']
+                    break
+
+        if not api_request_errors:
+            return ''
+
+        html_parts = []
+        html_parts.append('''
+        <div class="detail-section api-requests-section">
+            <details style="margin: 10px 0;">
+                <summary style="cursor: pointer; font-weight: bold; color: #e74c3c; padding: 8px; background: #fadbd8; border-radius: 4px; user-select: none;">
+                    🚫 API Request Errors ({count})
+                </summary>
+                <div style="margin-top: 10px; padding: 10px; background: #fff5f5; border: 1px solid #e74c3c; border-radius: 4px;">
+        '''.replace('{count}', str(len(api_request_errors))))
+
+        # Group errors by service
+        errors_by_service = {}
+        for error in api_request_errors:
+            service = error.get('service', 'unknown')
+            if service not in errors_by_service:
+                errors_by_service[service] = []
+            errors_by_service[service].append(error)
+
+        for service, errors in sorted(errors_by_service.items()):
+            html_parts.append(f'''
+                <div style="margin-bottom: 15px; border-left: 4px solid #e74c3c; padding-left: 10px;">
+                    <h5 style="color: #c0392b; margin: 5px 0; font-size: 14px;">Service: {escape(service)}</h5>
+            ''')
+
+            for error in errors:
+                operation = error.get('operation', 'unknown')
+                error_code = error.get('error_code', 'Unknown')
+                error_message = error.get('error_message', 'No message')
+                timestamp = error.get('timestamp', 'Unknown')
+                response_code = error.get('response_code')
+                duration_ms = error.get('duration_ms')
+
+                # Determine error category for styling
+                error_category = 'permission'
+                if error_code in ['AccessDenied', 'UnauthorizedOperation', 'Forbidden', 'AccessDeniedException']:
+                    error_category = 'permission'
+                    badge_color = '#e74c3c'
+                    badge_bg = '#fadbd8'
+                elif error_code in ['Throttling', 'RequestLimitExceeded', 'TooManyRequestsException']:
+                    error_category = 'throttling'
+                    badge_color = '#f39c12'
+                    badge_bg = '#fef5e7'
+                elif error_code in ['InvalidParameterValue', 'ValidationException', 'InvalidInput']:
+                    error_category = 'validation'
+                    badge_color = '#3498db'
+                    badge_bg = '#d6eaf8'
+                else:
+                    error_category = 'service'
+                    badge_color = '#95a5a6'
+                    badge_bg = '#ecf0f1'
+
+                html_parts.append(f'''
+                    <div style="background: white; padding: 10px; margin: 8px 0; border-radius: 4px; border: 1px solid #ecf0f1;">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                            <div>
+                                <span style="background: {badge_bg}; color: {badge_color}; padding: 3px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-right: 8px;">{escape(error_code)}</span>
+                                <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px; font-size: 13px;">{escape(operation)}</code>
+                            </div>
+                            <div style="text-align: right; font-size: 12px; color: #7f8c8d;">
+                                <div><strong>Time:</strong> {escape(str(timestamp))}</div>
+                                {f'<div><strong>Duration:</strong> {duration_ms}ms</div>' if duration_ms else ''}
+                                {f'<div><strong>Response Code:</strong> {response_code}</div>' if response_code else ''}
+                            </div>
+                        </div>
+                        <div style="color: #2c3e50; font-size: 13px; margin-top: 8px; padding: 8px; background: #f8f9fa; border-radius: 3px;">
+                            {escape(error_message[:300])}{'...' if len(error_message) > 300 else ''}
+                        </div>
+                ''')
+
+                # Add remediation guidance based on error type
+                if error_category == 'permission':
+                    html_parts.append('''
+                        <div style="margin-top: 8px; padding: 8px; background: #fff3cd; border-left: 3px solid #ffc107; font-size: 12px;">
+                            <strong>💡 Remediation:</strong> IAM permissions missing. Add required permission to the IAM policy attached to your credentials.
+                        </div>
+                    ''')
+                elif error_category == 'throttling':
+                    html_parts.append('''
+                        <div style="margin-top: 8px; padding: 8px; background: #fff3cd; border-left: 3px solid #ffc107; font-size: 12px;">
+                            <strong>💡 Remediation:</strong> AWS API rate limit exceeded. Wait a few minutes and retry, or request rate limit increase.
+                        </div>
+                    ''')
+                elif error_category == 'validation':
+                    html_parts.append('''
+                        <div style="margin-top: 8px; padding: 8px; background: #d6eaf8; border-left: 3px solid #3498db; font-size: 12px;">
+                            <strong>💡 Remediation:</strong> Invalid request parameters. Verify resource IDs and parameter values are correct.
+                        </div>
+                    ''')
+
+                html_parts.append('</div>')  # Close error div
+
+            html_parts.append('</div>')  # Close service group div
+
+        html_parts.append('''
+                </div>
+            </details>
+        </div>
+        ''')
+
+        return '\n'.join(html_parts)
+
     def _parse_test_description(self, docstring: str) -> str:
-        """Parse test docstring into structured HTML"""
+        """Parse test docstring into structured HTML with enhanced sections"""
         if not docstring:
             return '<p class="no-description">No description available</p>'
 
@@ -595,34 +964,97 @@ class HTMLReportGenerator:
         lines = docstring.split('\n')
         brief = lines[0].strip() if lines else 'No description'
 
-        # Look for Why: and Failure indicates: sections
+        # Initialize section texts
         why_text = ''
         failure_text = ''
+        success_text = ''
+        remediation_text = ''
+        documentation_text = ''
+        severity_text = ''
+
+        # Section markers and their stop markers
+        sections = {
+            'Why:': ('why_text', ['Failure indicates:', 'Success indicates:', 'Remediation:', 'Documentation:', 'Severity:']),
+            'Failure indicates:': ('failure_text', ['Success indicates:', 'Remediation:', 'Documentation:', 'Severity:']),
+            'Success indicates:': ('success_text', ['Remediation:', 'Documentation:', 'Severity:']),
+            'Remediation:': ('remediation_text', ['Documentation:', 'Severity:']),
+            'Documentation:': ('documentation_text', ['Severity:']),
+            'Severity:': ('severity_text', [])
+        }
 
         for i, line in enumerate(lines):
-            line = line.strip()
-            if line.startswith('Why:'):
-                why_text = line[4:].strip()
-                # Collect continuation lines
-                j = i + 1
-                while j < len(lines) and lines[j].strip() and not lines[j].strip().startswith('Failure'):
-                    why_text += ' ' + lines[j].strip()
-                    j += 1
-            elif line.startswith('Failure indicates:'):
-                failure_text = line[18:].strip()
-                # Collect continuation lines
-                j = i + 1
-                while j < len(lines) and lines[j].strip():
-                    failure_text += ' ' + lines[j].strip()
-                    j += 1
+            line_stripped = line.strip()
 
+            for marker, (var_name, stop_markers) in sections.items():
+                if line_stripped.startswith(marker):
+                    # Extract initial text after marker
+                    text = line_stripped[len(marker):].strip()
+
+                    # Collect continuation lines until next section or end
+                    j = i + 1
+                    while j < len(lines):
+                        next_line = lines[j].strip()
+                        # Stop if we hit another section marker
+                        if any(next_line.startswith(stop) for stop in stop_markers):
+                            break
+                        # Stop if empty line for non-remediation sections
+                        if not next_line and marker != 'Remediation:':
+                            break
+                        # Add the line (preserving formatting for Remediation)
+                        if marker == 'Remediation:':
+                            # Preserve indentation and line breaks for code blocks
+                            text += '\n' + lines[j].rstrip()
+                        else:
+                            text += ' ' + next_line
+                        j += 1
+
+                    # Assign to appropriate variable
+                    if var_name == 'why_text':
+                        why_text = text
+                    elif var_name == 'failure_text':
+                        failure_text = text
+                    elif var_name == 'success_text':
+                        success_text = text
+                    elif var_name == 'remediation_text':
+                        remediation_text = text
+                    elif var_name == 'documentation_text':
+                        documentation_text = text
+                    elif var_name == 'severity_text':
+                        severity_text = text
+
+        # Build HTML output
         html = f'<p class="test-brief"><strong>{brief}</strong></p>'
 
+        # Add severity badge if present
+        if severity_text:
+            severity_class = severity_text.lower().split()[0] if severity_text else 'medium'
+            html += f'<span class="severity-badge severity-{severity_class}">{severity_text}</span>'
+
         if why_text:
-            html += f'<p class="test-why"><strong>Why:</strong> {why_text}</p>'
+            html += f'<div class="test-section test-why"><strong>Why:</strong> {why_text}</div>'
 
         if failure_text:
-            html += f'<p class="test-failure"><strong>Failure indicates:</strong> {failure_text}</p>'
+            html += f'<div class="test-section test-failure"><strong>Failure indicates:</strong> {failure_text}</div>'
+
+        if success_text:
+            html += f'<div class="test-section test-success"><strong>Success indicates:</strong> {success_text}</div>'
+
+        if remediation_text:
+            # Format remediation with code blocks
+            remediation_html = remediation_text.replace('<', '&lt;').replace('>', '&gt;')
+            html += f'''
+            <div class="test-section test-remediation">
+                <strong>Remediation:</strong>
+                <pre class="remediation-code"><code>{remediation_html}</code></pre>
+            </div>
+            '''
+
+        if documentation_text:
+            # Make URLs clickable
+            if documentation_text.startswith('http'):
+                html += f'<div class="test-section test-docs"><strong>Documentation:</strong> <a href="{documentation_text}" target="_blank">{documentation_text}</a></div>'
+            else:
+                html += f'<div class="test-section test-docs"><strong>Documentation:</strong> {documentation_text}</div>'
 
         return html
 
@@ -1083,6 +1515,82 @@ class HTMLReportGenerator:
             color: #555;
         }
 
+        .test-section {
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+            color: #555;
+        }
+
+        .test-success {
+            color: #28a745;
+        }
+
+        .test-remediation {
+            background-color: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 12px;
+            margin: 12px 0;
+        }
+
+        .test-docs a {
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .test-docs a:hover {
+            text-decoration: underline;
+        }
+
+        .remediation-code {
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            overflow-x: auto;
+            white-space: pre;
+        }
+
+        .severity-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .severity-critical {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .severity-high {
+            background-color: #fd7e14;
+            color: white;
+        }
+
+        .severity-medium {
+            background-color: #ffc107;
+            color: #000;
+        }
+
+        .severity-low {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .severity-info {
+            background-color: #17a2b8;
+            color: white;
+        }
+
         .no-description {
             font-size: 14px;
             color: #999;
@@ -1119,6 +1627,155 @@ class HTMLReportGenerator:
             background: #d4edda;
             border-color: #c3e6cb;
             color: #155724;
+        }
+
+        /* CloudTrail Events Section */
+        .cloudtrail-section {
+            margin: 16px 0;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+        }
+
+        .cloudtrail-header {
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .cloudtrail-toggle {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            background: none;
+            text-align: left;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .cloudtrail-toggle:hover {
+            background-color: #e9ecef;
+        }
+
+        .cloudtrail-icon {
+            font-size: 18px;
+        }
+
+        .toggle-indicator {
+            margin-left: auto;
+            transition: transform 0.2s;
+        }
+
+        .cloudtrail-content {
+            padding: 12px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .cloudtrail-event {
+            padding: 12px;
+            margin-bottom: 12px;
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+
+        .cloudtrail-event:last-child {
+            margin-bottom: 0;
+        }
+
+        .event-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+
+        .event-time {
+            color: #6c757d;
+            font-size: 13px;
+            margin-left: auto;
+        }
+
+        .event-summary {
+            color: #495057;
+            font-size: 13px;
+            line-height: 1.5;
+            margin: 8px 0;
+        }
+
+        .event-link-container {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .event-link {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .event-link:hover {
+            text-decoration: underline;
+        }
+
+        /* CloudTrail Event Category Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-creation-failed {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .badge-deletion {
+            background-color: #fd7e14;
+            color: white;
+        }
+
+        .badge-creation {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .badge-modification {
+            background-color: #ffc107;
+            color: #000;
+        }
+
+        .badge-authorization {
+            background-color: #17a2b8;
+            color: white;
+        }
+
+        .badge-revocation {
+            background-color: #e83e8c;
+            color: white;
+        }
+
+        .badge-other {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        .cloudtrail-available-message {
+            color: #6c757d;
+            font-size: 13px;
+            font-style: italic;
         }
     </style>"""
 

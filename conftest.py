@@ -126,6 +126,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "aws_resources: AWS IAM resources and OIDC provider tests"
     )
+    config.addinivalue_line(
+        "markers", "severity: Test severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)"
+    )
+    config.addinivalue_line(
+        "markers", "blocks_install: Indicates that failure of this test will prevent cluster installation"
+    )
 
 
 def pytest_runtest_setup(item):
@@ -174,5 +180,48 @@ def pytest_runtest_makereport(item, call):
             item.user_properties.append(("files_accessed", files_accessed))
             item.user_properties.append(("files_expected_but_missing", files_expected_but_missing))
             item.user_properties.append(("attributes_no_files", attrs_no_files))
+
+            # Capture CloudTrail context for failed tests
+            # This will be used by HTML report to show related events
+            if outcome.outcome in ['failed', 'skipped']:
+                try:
+                    from utils.cloudtrail_correlator import create_correlator_from_cluster_data
+                    correlator = create_correlator_from_cluster_data(cluster_data)
+                    if correlator and correlator.events:
+                        # Store basic CloudTrail availability info
+                        # Tests can add specific resource correlation via test helpers
+                        item.user_properties.append(("cloudtrail_available", True))
+                        item.user_properties.append(("cloudtrail_event_count", len(correlator.events)))
+                except Exception:
+                    # Don't fail test if CloudTrail correlation fails
+                    pass
+
+            # Capture API request errors for failed tests
+            # This will be used by HTML report to show permission/API issues
+            if outcome.outcome in ['failed', 'skipped']:
+                try:
+                    # Get failed API requests from cluster data
+                    failed_requests = cluster_data.get_failed_requests()
+
+                    if failed_requests:
+                        # Format errors for HTML display
+                        api_request_errors = []
+                        for req in failed_requests:
+                            error = req.get('error', {})
+                            api_request_errors.append({
+                                'service': req.get('service'),
+                                'operation': req.get('operation'),
+                                'error_code': error.get('code', 'Unknown'),
+                                'error_message': error.get('message', 'No message'),
+                                'timestamp': req.get('timestamp'),
+                                'response_code': req.get('response_code'),
+                                'duration_ms': req.get('duration_ms'),
+                                'parameters': req.get('parameters', {})
+                            })
+
+                        item.user_properties.append(("api_request_errors", api_request_errors))
+                except Exception:
+                    # Don't fail test if API request error capture fails
+                    pass
 
     return outcome

@@ -246,6 +246,14 @@ def load_cluster_data(data_dir: Path) -> ClusterData:
             else:
                 cluster_data.cloudtrail_events = ct_data.get('Events', [])
 
+    # Load API request tracking log
+    api_request_file = aws_dir / f"{cluster_id}_api_requests.json"
+    if api_request_file.exists():
+        api_data = load_json_file(api_request_file, cluster_data)
+        if api_data:
+            cluster_data.register_attribute_file('api_requests', str(api_request_file))
+            cluster_data.api_requests = api_data
+
     # Load Route53 data
     route53_files = list(aws_dir.glob(f"{cluster_id}_hosted_zones.json"))
     if route53_files:
