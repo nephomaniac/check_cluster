@@ -49,7 +49,7 @@ def test_target_health_data_collected(cluster_data: ClusterData):
 @pytest.mark.load_balancers
 @pytest.mark.severity("CRITICAL")
 @pytest.mark.blocks_install
-def test_api_server_targets_healthy(cluster_data: ClusterData):
+def test_api_server_targets_healthy(cluster_data: ClusterData, request):
     """API server targets must be healthy in load balancer
 
     Why: The load balancer performs health checks on API server instances to
@@ -133,6 +133,8 @@ def test_api_server_targets_healthy(cluster_data: ClusterData):
 
     if unhealthy_targets:
         details = []
+        resource_ids = []
+
         for target in unhealthy_targets[:10]:  # Show first 10
             details.append(
                 f"\nTarget Group: {target['target_group']}\n"
@@ -141,6 +143,21 @@ def test_api_server_targets_healthy(cluster_data: ClusterData):
                 f"  State: {target['state']}\n"
                 f"  Reason: {target['reason']}\n"
                 f"  Description: {target['description']}"
+            )
+            # Collect instance IDs and target group names for CloudTrail correlation
+            resource_ids.append(target['instance_id'])
+            resource_ids.append(target['target_group'])
+
+        # Correlate CloudTrail events for unhealthy/deregistered targets
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        if resource_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=resource_ids,
+                resource_type="Load Balancer Target",
+                event_types=["Deregister", "DeregisterTargets", "Terminate", "Stop"],
+                pytest_request=request
             )
 
         pytest.fail(
@@ -151,7 +168,7 @@ def test_api_server_targets_healthy(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 @pytest.mark.severity("HIGH")
-def test_machine_config_server_targets_healthy(cluster_data: ClusterData):
+def test_machine_config_server_targets_healthy(cluster_data: ClusterData, request):
     """Machine Config Server (MCS) targets must be healthy in load balancer
 
     Why: The Machine Config Server (MCS) listens on port 22623 and serves ignition
@@ -219,6 +236,8 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData):
 
     if unhealthy_targets:
         details = []
+        resource_ids = []
+
         for target in unhealthy_targets[:10]:  # Show first 10
             details.append(
                 f"\nTarget Group: {target['target_group']}\n"
@@ -227,6 +246,21 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData):
                 f"  State: {target['state']}\n"
                 f"  Reason: {target['reason']}\n"
                 f"  Description: {target['description']}"
+            )
+            # Collect instance IDs and target group names for CloudTrail correlation
+            resource_ids.append(target['instance_id'])
+            resource_ids.append(target['target_group'])
+
+        # Correlate CloudTrail events for unhealthy/deregistered targets
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        if resource_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=resource_ids,
+                resource_type="Load Balancer Target",
+                event_types=["Deregister", "DeregisterTargets", "Terminate", "Stop"],
+                pytest_request=request
             )
 
         pytest.fail(
