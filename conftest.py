@@ -13,6 +13,101 @@ from models.cluster import ClusterData
 from utils.data_loader import load_cluster_data
 
 
+def _get_relevant_services_for_test(item):
+    """
+    Determine which AWS services are relevant to a test based on markers and test name.
+
+    This filters API request errors to only show errors from services that the test
+    is actually validating, preventing irrelevant errors from being displayed.
+
+    Args:
+        item: pytest test item
+
+    Returns:
+        Set of relevant AWS service names (e.g., {'ec2', 'elbv2', 'cloudtrail'})
+    """
+    relevant_services = set()
+
+    # Get test markers
+    markers = {marker.name for marker in item.iter_markers()}
+
+    # Get test name
+    test_name = item.name.lower()
+
+    # Map markers to AWS services
+    marker_to_services = {
+        'instances': {'ec2', 'cloudtrail'},
+        'vpc': {'ec2'},
+        'network': {'ec2'},
+        'security_groups': {'ec2', 'cloudtrail'},
+        'storage': {'ec2'},
+        'load_balancers': {'elb', 'elbv2', 'ec2'},
+        'route53': {'route53'},
+        'iam': {'iam'},
+        'iam_roles': {'iam'},
+        'iam_permissions': {'iam', 'ec2', 'elbv2', 'route53', 's3', 'cloudtrail'},
+        'operator_roles': {'iam'},
+        'installation': {'ec2', 'elbv2'},
+        'controlplane': {'ec2', 'cloudtrail'},
+        'node': {'ec2', 'cloudtrail'},
+        'loadbalancer': {'elb', 'elbv2'},
+        'egress': {'ec2'},
+        'icmp': {'ec2'},
+        'ignition': {'s3', 'ec2'},
+        'bootstrap': {'ec2', 'elbv2'},
+        'operators': {'ec2'},
+        'etcd': {'ec2'},
+    }
+
+    # Add services based on markers
+    for marker in markers:
+        if marker in marker_to_services:
+            relevant_services.update(marker_to_services[marker])
+
+    # Add services based on test name patterns
+    test_name_patterns = {
+        'instance': {'ec2', 'cloudtrail'},
+        'vpc': {'ec2'},
+        'subnet': {'ec2'},
+        'security_group': {'ec2', 'cloudtrail'},
+        'sg_': {'ec2', 'cloudtrail'},
+        'volume': {'ec2'},
+        'ebs': {'ec2'},
+        'load_balancer': {'elb', 'elbv2', 'ec2'},
+        'target_health': {'elbv2', 'ec2'},
+        'route53': {'route53'},
+        'dns': {'route53'},
+        'iam': {'iam'},
+        'role': {'iam'},
+        'policy': {'iam'},
+        'nat': {'ec2'},
+        'internet_gateway': {'ec2'},
+        'igw': {'ec2'},
+        'route_table': {'ec2'},
+        'cloudtrail': {'cloudtrail'},
+        'master': {'ec2'},
+        'worker': {'ec2'},
+        'control_plane': {'ec2'},
+        'bootstrap': {'ec2', 'elbv2'},
+        'ignition': {'s3', 'ec2'},
+        'etcd': {'ec2'},
+    }
+
+    # Check test name against patterns
+    for pattern, services in test_name_patterns.items():
+        if pattern in test_name:
+            relevant_services.update(services)
+
+    # If no services identified, default to common services
+    # This ensures we don't accidentally hide all errors
+    if not relevant_services:
+        # For generic/unknown tests, show EC2 and CloudTrail errors
+        # as these are the most commonly relevant
+        relevant_services = {'ec2', 'cloudtrail'}
+
+    return relevant_services
+
+
 def pytest_addoption(parser):
     """Add custom command-line options for pytest"""
     parser.addoption(
@@ -204,22 +299,31 @@ def pytest_runtest_makereport(item, call):
                     failed_requests = cluster_data.get_failed_requests()
 
                     if failed_requests:
-                        # Format errors for HTML display
+                        # Filter API errors to only show those relevant to this test
+                        relevant_services = _get_relevant_services_for_test(item)
+
+                        # Format errors for HTML display (only relevant ones)
                         api_request_errors = []
                         for req in failed_requests:
-                            error = req.get('error', {})
-                            api_request_errors.append({
-                                'service': req.get('service'),
-                                'operation': req.get('operation'),
-                                'error_code': error.get('code', 'Unknown'),
-                                'error_message': error.get('message', 'No message'),
-                                'timestamp': req.get('timestamp'),
-                                'response_code': req.get('response_code'),
-                                'duration_ms': req.get('duration_ms'),
-                                'parameters': req.get('parameters', {})
-                            })
+                            service = req.get('service', '')
 
-                        item.user_properties.append(("api_request_errors", api_request_errors))
+                            # Only include errors from services relevant to this test
+                            if service in relevant_services:
+                                error = req.get('error', {})
+                                api_request_errors.append({
+                                    'service': service,
+                                    'operation': req.get('operation'),
+                                    'error_code': error.get('code', 'Unknown'),
+                                    'error_message': error.get('message', 'No message'),
+                                    'timestamp': req.get('timestamp'),
+                                    'response_code': req.get('response_code'),
+                                    'duration_ms': req.get('duration_ms'),
+                                    'parameters': req.get('parameters', {})
+                                })
+
+                        # Only attach if there are relevant errors
+                        if api_request_errors:
+                            item.user_properties.append(("api_request_errors", api_request_errors))
                 except Exception:
                     # Don't fail test if API request error capture fails
                     pass
