@@ -171,6 +171,7 @@ def test_no_security_group_revocations(cluster_data: ClusterData, request):
 
         # Correlate CloudTrail events for HTML display
         from utils.test_helpers import correlate_cloudtrail_events_for_resources
+        ct_result = None
         if security_group_ids:
             ct_result = correlate_cloudtrail_events_for_resources(
                 cluster_data=cluster_data,
@@ -179,6 +180,15 @@ def test_no_security_group_revocations(cluster_data: ClusterData, request):
                 event_types=["Revoke"],
                 pytest_request=request
             )
+
+            # If only installer role events, treat as informational (expected behavior)
+            if ct_result and ct_result.get('only_installer_events'):
+                pytest.skip(
+                    f"INFORMATIONAL: Security group rules were revoked, but CloudTrail shows "
+                    f"only installer role activity (expected during cluster installation).\n\n"
+                    f"Found {len(revoke_events)} security group revoke events:\n" +
+                    "\n".join(details)
+                )
 
         pytest.fail(
             f"Found {len(revoke_events)} security group revoke events:\n" +
