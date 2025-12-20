@@ -10,7 +10,7 @@ from models.cluster import ClusterData
 
 
 @pytest.mark.route53
-def test_hosted_zone_exists(cluster_data: ClusterData):
+def test_hosted_zone_exists(cluster_data: ClusterData, request):
     """Cluster must have a Route53 hosted zone.
 
     Why: Route53 hosted zones provide DNS resolution for cluster API endpoints and
@@ -32,6 +32,26 @@ def test_hosted_zone_exists(cluster_data: ClusterData):
             expected_file=f"{cluster_data.cluster_id}_route53_zones.json",
             api_service="route53",
             api_operation="list_hosted_zones"
+        )
+
+        # Correlate CloudTrail events for deleted hosted zones
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        # Try to get domain from cluster JSON
+        dns_config = cluster_data.cluster_json.get('dns', {})
+        domain = dns_config.get('baseDomain') or dns_config.get('base_domain', '')
+        if not domain:
+            domain = cluster_data.cluster_json.get('base_domain', '')
+
+        # Search for hosted zone deletion events
+        resource_ids = [domain, cluster_data.cluster_name] if domain else [cluster_data.cluster_name]
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=resource_ids,
+            resource_type="Route53 Hosted Zone",
+            event_types=["Delete", "DeleteHostedZone"],
+            pytest_request=request
         )
 
         pytest.fail(f"No Route53 hosted zone data found.\n\n{diagnostics}")
@@ -64,6 +84,26 @@ def test_hosted_zone_exists(cluster_data: ClusterData):
             expected_file=f"{cluster_data.cluster_id}_route53_zones.json",
             api_service="route53",
             api_operation="list_hosted_zones"
+        )
+
+        # Correlate CloudTrail events for deleted hosted zones
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        # Try to get domain from cluster JSON
+        dns_config = cluster_data.cluster_json.get('dns', {})
+        domain = dns_config.get('baseDomain') or dns_config.get('base_domain', '')
+        if not domain:
+            domain = cluster_data.cluster_json.get('base_domain', '')
+
+        # Search for hosted zone deletion events
+        resource_ids = [domain, cluster_data.cluster_name] if domain else [cluster_data.cluster_name]
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=resource_ids,
+            resource_type="Route53 Hosted Zone",
+            event_types=["Delete", "DeleteHostedZone"],
+            pytest_request=request
         )
 
         print("\n✗ No hosted zones found")
