@@ -342,16 +342,36 @@ def correlate_cloudtrail_events_for_resources(
         )
 
         for event in events:
+            # Extract ARN from userIdentity
+            user_arn = ''
+            if event.cloud_trail_event:
+                user_identity = event.cloud_trail_event.get('userIdentity', {})
+                user_arn = user_identity.get('arn', '') or user_identity.get('principalId', '')
+
+            # Determine status code
+            status_code = 'Success'
+            if event.error_code:
+                status_code = f'Error: {event.error_code}'
+            elif event.cloud_trail_event:
+                # Some successful events may have explicit response codes
+                error_code = event.cloud_trail_event.get('errorCode')
+                if error_code:
+                    status_code = f'Error: {error_code}'
+
             # Create event summary for HTML display
             event_summary = {
                 'category': event.get_event_category(),
                 'event_name': event.event_name,
                 'event_time': event.event_time,
                 'username': event.username,
+                'user_arn': user_arn,
+                'status_code': status_code,
+                'requested_action': event.event_name,
                 'resource_id': resource_id,
                 'summary': _format_event_summary(event, resource_id, resource_type),
                 'file': event.source_file,
-                'index': event.event_index
+                'index': event.event_index,
+                'full_event': event.cloud_trail_event if event.cloud_trail_event else event.raw_event
             }
             event_summaries.append(event_summary)
             all_events.append(event)

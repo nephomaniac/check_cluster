@@ -868,6 +868,14 @@ class HTMLReportGenerator:
             source_file = event.get('file', '')
             event_index = event.get('index', 0)
 
+            # Get enhanced fields
+            username = event.get('username', 'Unknown')
+            user_arn = event.get('user_arn', '')
+            status_code = event.get('status_code', 'Unknown')
+            requested_action = event.get('requested_action', event_name)
+            resource_id = event.get('resource_id', '')
+            full_event = event.get('full_event', {})
+
             # Determine badge class based on category
             badge_class = {
                 'Creation Failed': 'badge-creation-failed',
@@ -879,30 +887,42 @@ class HTMLReportGenerator:
                 'Other': 'badge-other'
             }.get(category, 'badge-other')
 
+            # Determine status badge color
+            status_badge_class = 'status-success' if 'Success' in status_code else 'status-error'
+
             # Create link to event in CloudTrail file
             event_link = ''
-            resource_id = event.get('resource_id', '')
-            username = event.get('username', 'Unknown')
-
             if source_file:
-                # Link to CloudTrail JSON file with helpful context
                 filename = os.path.basename(source_file)
-                # Show event index for searching in the file
-                event_link = f'<a href="{escape(filename)}" class="event-link" title="Open {escape(filename)} and search for event #{event_index} or username \'{escape(username)}\'">📄 View in {escape(filename)} (Event #{event_index})</a>'
+                event_link = f'<a href="{escape(filename)}" class="event-link" title="Open {escape(filename)} and search for event #{event_index}">📄 {escape(filename)} (Event #{event_index})</a>'
+
+            # Format full event JSON for dropdown
+            import json as json_module
+            full_event_json = json_module.dumps(full_event, indent=2) if full_event else '{}'
 
             html_parts.append(f'''
                 <div class="cloudtrail-event">
                     <div class="event-header">
                         <span class="badge {badge_class}">{escape(category)}</span>
-                        <strong>{escape(event_name)}</strong>
+                        <strong>{escape(requested_action)}</strong>
+                        <span class="badge {status_badge_class}" style="margin-left: 8px;">{escape(status_code)}</span>
                         <span class="event-time">{escape(str(event_time))}</span>
                     </div>
                     <div class="event-details" style="margin: 8px 0; font-size: 13px; color: #555;">
                         <div><strong>User:</strong> {escape(username)}</div>
+                        {f'<div><strong>ARN:</strong> <code style="font-size: 11px; background: #f5f5f5; padding: 2px 4px; border-radius: 2px;">{escape(user_arn)}</code></div>' if user_arn else ''}
                         {f'<div><strong>Resource:</strong> {escape(resource_id)}</div>' if resource_id else ''}
-                        <div style="margin-top: 4px;">{escape(summary)}</div>
+                        <div style="margin-top: 4px;"><strong>Summary:</strong> {escape(summary)}</div>
                     </div>
-                    {f'<div class="event-link-container">{event_link}</div>' if event_link else ''}
+                    {f'<div class="event-link-container" style="margin-top: 8px;">{event_link}</div>' if event_link else ''}
+                    <details style="margin-top: 10px; border-top: 1px solid #e9ecef; padding-top: 10px;">
+                        <summary style="cursor: pointer; font-weight: 600; color: #495057; padding: 6px; background: #f8f9fa; border-radius: 3px; user-select: none;">
+                            🔍 View Full CloudTrail Event JSON
+                        </summary>
+                        <div style="margin-top: 10px;">
+                            <pre style="background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 12px; line-height: 1.5; margin: 0; max-height: 400px; overflow-y: auto;"><code>{escape(full_event_json)}</code></pre>
+                        </div>
+                    </details>
                 </div>
             ''')
 
@@ -1857,6 +1877,16 @@ class HTMLReportGenerator:
 
         .badge-other {
             background-color: #6c757d;
+            color: white;
+        }
+
+        .status-success {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .status-error {
+            background-color: #dc3545;
             color: white;
         }
 
