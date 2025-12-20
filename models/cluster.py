@@ -44,6 +44,9 @@ class ClusterData:
     _attribute_to_files: Dict[str, List[str]] = field(default_factory=dict, init=False, repr=False)
     _tracking_enabled: bool = field(default=True, init=False, repr=False)
 
+    # Console log cache to avoid re-parsing large files
+    _console_logs_cache: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
+
     @property
     def aws_dir(self) -> Path:
         """
@@ -75,6 +78,23 @@ class ClusterData:
             return TrackedPath(sources_ocm, self)
         # Legacy flat structure - OCM files in data_dir
         return TrackedPath(self.data_dir, self)
+
+    @property
+    def hosts_dir(self) -> Path:
+        """
+        Get directory containing EC2 instance console logs.
+
+        Returns sources/hosts/ if new directory structure exists, otherwise None.
+        Console logs follow pattern: {cluster_id}_{instance_id}_console.log
+        """
+        # Import here to avoid circular dependency
+        from utils.tracked_path import TrackedPath
+
+        sources_hosts = Path(self.data_dir) / "sources" / "hosts"
+        if sources_hosts.exists() and sources_hosts.is_dir():
+            return TrackedPath(sources_hosts, self)
+        # No hosts directory - console logs not collected
+        return TrackedPath(Path(self.data_dir) / "sources" / "hosts", self)
 
     @property
     def infra_id(self) -> str:
@@ -400,3 +420,147 @@ class ClusterData:
         if not self.api_requests:
             return {}
         return self.api_requests.get('collection_metadata', {})
+
+    # =========================================================================
+    # Console Log Helper Methods (for deep diagnostic analysis)
+    # =========================================================================
+
+    def get_console_log(self, instance_id: str) -> Optional[str]:
+        """
+        Lazy load console log for a specific EC2 instance.
+
+        Console logs are large (50KB-500KB) so we load them on-demand and cache.
+
+        Args:
+            instance_id: EC2 instance ID (e.g., "i-0abc123def456789")
+
+        Returns:
+            Console log content as string, or None if not found
+
+        Example:
+            >>> log = cluster_data.get_console_log("i-0abc123def456789")
+            >>> if log:
+            >>>     # Analyze log for bootstrap progress
+        """
+        # Check cache first
+        if instance_id in self._console_logs_cache:
+            return self._console_logs_cache[instance_id]
+
+        # Construct expected file path
+        log_file = self.hosts_dir / f"{self.cluster_id}_{instance_id}_console.log"
+
+        # Check if file exists and read it
+        if log_file.exists():
+            try:
+                with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+                    # Cache for future access
+                    self._console_logs_cache[instance_id] = content
+                    return content
+            except Exception as e:
+                # Log read error but don't fail - return None
+                import sys
+                print(f"Warning: Failed to read console log {log_file}: {e}", file=sys.stderr)
+                return None
+
+        return None
+
+    def get_all_console_logs(self) -> Dict[str, str]:
+        """
+        Load all available console logs for the cluster.
+
+        Returns:
+            Dict mapping instance_id -> log_content
+
+        Example:
+            >>> logs = cluster_data.get_all_console_logs()
+            >>> for instance_id, log in logs.items():
+            >>>     print(f"Instance {instance_id}: {len(log)} bytes")
+        """
+        console_logs = {}
+
+        # Check if hosts directory exists
+        if not self.hosts_dir.exists():
+            return console_logs
+
+        # Find all console log files matching pattern
+        pattern = f"{self.cluster_id}_*_console.log"
+        for log_file in self.hosts_dir.glob(pattern):
+            # Extract instance ID from filename
+            # Pattern: {cluster_id}_{instance_id}_console.log
+            filename = log_file.stem  # Remove .log
+            parts = filename.split('_')
+            if len(parts) >= 2:
+                # Join all parts except first (cluster_id) and last (console)
+                # This handles cluster IDs that contain underscores
+                instance_id = '_'.join(parts[1:-1]) if len(parts) > 2 else parts[1]
+
+                # Load the log (will use cache if already loaded)
+                log_content = self.get_console_log(instance_id)
+                if log_content:
+                    console_logs[instance_id] = log_content
+
+        return console_logs
+
+    def get_ocm_install_logs(self) -> List[Dict[str, Any]]:
+        """
+        Parse OCM resources.json for installation log entries.
+
+        OCM resources may contain installation logs with timestamps, events,
+        and status information that complements console logs.
+
+        Returns:
+            List of log entry dicts, or empty list if no logs found
+
+        Example:
+            >>> logs = cluster_data.get_ocm_install_logs()
+            >>> for entry in logs:
+            >>>     print(f"{entry['timestamp']}: {entry['message']}")
+        """
+        # Check if resources dict has logs
+        if not self.resources:
+            return []
+
+        # OCM resources.json structure varies, but commonly has:
+        # - logs: List of log entries
+        # - events: List of events
+        # - messages: Installation messages
+
+        logs = []
+
+        # Try to extract logs from resources
+        if isinstance(self.resources, dict):
+            # Direct logs array
+            if 'logs' in self.resources:
+                logs_data = self.resources['logs']
+                if isinstance(logs_data, list):
+                    logs.extend(logs_data)
+
+            # Events that may contain log-like information
+            if 'events' in self.resources:
+                events_data = self.resources['events']
+                if isinstance(events_data, list):
+                    # Convert events to log format
+                    for event in events_data:
+                        if isinstance(event, dict):
+                            logs.append({
+                                'timestamp': event.get('timestamp'),
+                                'message': event.get('message', event.get('description', '')),
+                                'type': 'event',
+                                'severity': event.get('severity', 'INFO')
+                            })
+
+            # Installation messages
+            if 'messages' in self.resources:
+                messages_data = self.resources['messages']
+                if isinstance(messages_data, list):
+                    for msg in messages_data:
+                        if isinstance(msg, dict):
+                            logs.append({
+                                'timestamp': msg.get('timestamp'),
+                                'message': msg.get('message', str(msg)),
+                                'type': 'message',
+                                'severity': msg.get('severity', 'INFO')
+                            })
+
+        return logs
