@@ -2177,8 +2177,45 @@ class HTMLReportGenerator:
             }
         }
 
+        // Function to expand test details when navigating via hash link
+        function expandTestFromHash() {
+            const hash = window.location.hash;
+            if (hash && hash.startsWith('#test-')) {
+                const testId = hash.substring(1); // Remove the '#'
+                const detailsRow = document.getElementById(testId);
+
+                if (detailsRow && detailsRow.classList.contains('test-details-row')) {
+                    // Remove hidden class to show the details
+                    detailsRow.classList.remove('hidden');
+
+                    // Find the corresponding button and update it
+                    const testRow = detailsRow.previousElementSibling;
+                    if (testRow) {
+                        const button = testRow.querySelector('.details-toggle');
+                        if (button) {
+                            button.classList.add('expanded');
+                            const arrow = button.querySelector('.toggle-arrow');
+                            const text = button.querySelector('.toggle-text');
+                            if (arrow) arrow.textContent = '▼';
+                            if (text) text.textContent = 'Hide Details';
+                        }
+                    }
+
+                    // Scroll to the element with smooth behavior
+                    setTimeout(() => {
+                        detailsRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 100);
+                }
+            }
+        }
+
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // All categories start expanded, no action needed
+            // Handle hash navigation on page load
+            expandTestFromHash();
         });
+
+        // Handle hash changes (when clicking links)
+        window.addEventListener('hashchange', expandTestFromHash);
     </script>"""
