@@ -23,18 +23,17 @@ def get_test_result_status(request, test_name: str) -> str:
         'passed', 'failed', 'skipped', 'error', or 'unknown'
     """
     try:
-        # Access the session to get test results
-        session = request.session
+        # Get the terminal reporter which accumulates test results as they run
+        terminalreporter = request.config.pluginmanager.get_plugin('terminalreporter')
 
-        # Try to find the test in the session's test reports
-        if hasattr(session, 'testscollected') and session.testscollected:
-            for item in session.items:
-                if test_name in item.nodeid:
-                    # Check if this test has been run
-                    if hasattr(item, 'rep_call'):
-                        return item.rep_call.outcome
-                    elif hasattr(item, 'rep_setup'):
-                        return item.rep_setup.outcome
+        if terminalreporter and hasattr(terminalreporter, 'stats'):
+            # Check each outcome category in order of priority
+            for outcome in ['passed', 'failed', 'error', 'skipped']:
+                reports = terminalreporter.stats.get(outcome, [])
+                for report in reports:
+                    # Check if this report matches our test name
+                    if test_name in report.nodeid and report.when == 'call':
+                        return outcome
 
         return 'unknown'
     except Exception:
