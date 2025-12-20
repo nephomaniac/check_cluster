@@ -20,7 +20,7 @@ from models.cluster import ClusterData
 
 
 @pytest.mark.network
-def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
+def test_subnets_exist(cluster_data: ClusterData, infra_id: str, request):
     """Cluster should have at least one subnet
 
     Why: Subnets provide IP address ranges for cluster resources and enable network isolation.
@@ -45,6 +45,17 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
             resource_identifier=infra_id
         )
 
+        # Correlate CloudTrail events for deleted subnets
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[infra_id],
+            resource_type="Subnet",
+            event_types=["Delete", "DeleteSubnet"],
+            pytest_request=request
+        )
+
         pytest.fail(f"No subnets data found.\n\n{diagnostics}")
 
     with open(subnets_file) as f:
@@ -64,6 +75,17 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str):
             api_service="ec2",
             api_operation="describe_subnets",
             resource_identifier=infra_id
+        )
+
+        # Correlate CloudTrail events for deleted subnets
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[infra_id],
+            resource_type="Subnet",
+            event_types=["Delete", "DeleteSubnet"],
+            pytest_request=request
         )
 
         pytest.fail(f"No subnets found for cluster {infra_id}.\n\n{diagnostics}")
@@ -216,7 +238,7 @@ def test_subnet_kubernetes_role_tags(cluster_data: ClusterData, infra_id: str):
 
 
 @pytest.mark.network
-def test_internet_gateway_exists(cluster_data: ClusterData, infra_id: str, is_private_cluster: bool):
+def test_internet_gateway_exists(cluster_data: ClusterData, infra_id: str, is_private_cluster: bool, request):
     """Public clusters should have an Internet Gateway"""
     if is_private_cluster:
         pytest.skip("Private clusters do not require internet gateway for public access")
@@ -246,6 +268,17 @@ def test_internet_gateway_exists(cluster_data: ClusterData, infra_id: str, is_pr
         print(json.dumps(igw_summary, indent=2))
     else:
         print(f"\n✗ No internet gateway found for cluster {infra_id}")
+
+        # Correlate CloudTrail events for deleted internet gateways
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[infra_id],
+            resource_type="Internet Gateway",
+            event_types=["Delete", "DeleteInternetGateway", "Detach", "DetachInternetGateway"],
+            pytest_request=request
+        )
 
     assert len(cluster_igws) > 0, f"No internet gateway found for public cluster {infra_id}"
 
@@ -310,7 +343,7 @@ def test_internet_gateway_attached(cluster_data: ClusterData, infra_id: str, is_
 
 
 @pytest.mark.network
-def test_nat_gateway_exists(cluster_data: ClusterData, infra_id: str):
+def test_nat_gateway_exists(cluster_data: ClusterData, infra_id: str, request):
     """Cluster should have at least one NAT Gateway for private subnet egress"""
     nat_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_nat_gateways.json"
 
@@ -338,6 +371,17 @@ def test_nat_gateway_exists(cluster_data: ClusterData, infra_id: str):
         print(json.dumps(nat_summary, indent=2))
     else:
         print(f"\n✗ No NAT gateway found for cluster {infra_id}")
+
+        # Correlate CloudTrail events for deleted NAT gateways
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        ct_result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=[infra_id],
+            resource_type="NAT Gateway",
+            event_types=["Delete", "DeleteNatGateway"],
+            pytest_request=request
+        )
 
     assert len(cluster_nat_gws) > 0, f"No NAT gateway found for cluster {infra_id}"
 
