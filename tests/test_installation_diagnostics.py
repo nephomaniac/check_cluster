@@ -49,10 +49,17 @@ def test_bootstrap_detailed_analysis(cluster_data: ClusterData, request):
         tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
         name = tags.get('Name', '')
         if 'master' in name.lower():
+            # Handle State being either dict or string
+            state = instance.get('State', {})
+            if isinstance(state, dict):
+                state_name = state.get('Name', 'unknown')
+            else:
+                state_name = state if state else 'unknown'
+
             master_instances.append({
                 'instance_id': instance.get('InstanceId'),
                 'name': name,
-                'state': instance.get('State', {}).get('Name', 'unknown')
+                'state': state_name
             })
 
     if not master_instances:

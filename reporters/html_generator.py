@@ -171,6 +171,10 @@ class HTMLReportGenerator:
                     <div class="card-value">{summary['failed']}</div>
                     <div class="card-label">Failed</div>
                 </div>
+                <div class="summary-card error">
+                    <div class="card-value">{summary['error']}</div>
+                    <div class="card-label">Errors</div>
+                </div>
                 <div class="summary-card skipped">
                     <div class="card-value">{summary['skipped']}</div>
                     <div class="card-label">Skipped</div>
@@ -1653,6 +1657,10 @@ class HTMLReportGenerator:
 
         .summary-card.failed {
             border-left-color: #e74c3c;
+        }
+
+        .summary-card.error {
+            border-left-color: #ff6b35;
         }
 
         .summary-card.skipped {
