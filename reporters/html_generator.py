@@ -682,6 +682,10 @@ class HTMLReportGenerator:
             if outcome == 'failed':
                 full_msg = self._extract_full_failure_message(test)
                 if full_msg:
+                    # Override status_reason to direct users to the full details
+                    status_reason = 'See failure details below'
+                    escaped_status_reason = escape(status_reason)
+
                     # Escape for HTML and preserve formatting
                     escaped_msg = escape(full_msg)
                     full_failure_message = f'''
