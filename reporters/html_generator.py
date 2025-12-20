@@ -881,11 +881,14 @@ class HTMLReportGenerator:
 
             # Create link to event in CloudTrail file
             event_link = ''
+            resource_id = event.get('resource_id', '')
+            username = event.get('username', 'Unknown')
+
             if source_file:
-                # Create anchor link to specific event
-                # This assumes the CloudTrail file will be viewable
+                # Link to CloudTrail JSON file with helpful context
                 filename = os.path.basename(source_file)
-                event_link = f'<a href="{filename}#event-{event_index}" class="event-link" title="View full event in {filename}">View Full Event →</a>'
+                # Show event index for searching in the file
+                event_link = f'<a href="{escape(filename)}" class="event-link" title="Open {escape(filename)} and search for event #{event_index} or username \'{escape(username)}\'">📄 View in {escape(filename)} (Event #{event_index})</a>'
 
             html_parts.append(f'''
                 <div class="cloudtrail-event">
@@ -894,7 +897,11 @@ class HTMLReportGenerator:
                         <strong>{escape(event_name)}</strong>
                         <span class="event-time">{escape(str(event_time))}</span>
                     </div>
-                    <div class="event-summary">{escape(summary)}</div>
+                    <div class="event-details" style="margin: 8px 0; font-size: 13px; color: #555;">
+                        <div><strong>User:</strong> {escape(username)}</div>
+                        {f'<div><strong>Resource:</strong> {escape(resource_id)}</div>' if resource_id else ''}
+                        <div style="margin-top: 4px;">{escape(summary)}</div>
+                    </div>
                     {f'<div class="event-link-container">{event_link}</div>' if event_link else ''}
                 </div>
             ''')
