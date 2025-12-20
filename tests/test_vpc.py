@@ -10,7 +10,7 @@ from models.cluster import ClusterData
 
 
 @pytest.mark.vpc
-def test_vpc_exists(cluster_data: ClusterData):
+def test_vpc_exists(cluster_data: ClusterData, request):
     """VPC must exist and be configured.
 
     Why: The VPC provides network isolation and contains all cluster networking resources
@@ -41,6 +41,18 @@ def test_vpc_exists(cluster_data: ClusterData):
             api_operation="describe_vpcs",
             resource_identifier=vpc_id if vpc_id != 'unknown' else None
         )
+
+        # Correlate CloudTrail events for missing VPC
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+
+        if vpc_id and vpc_id != 'unknown':
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=[vpc_id],
+                resource_type="VPC",
+                event_types=["Delete", "DeleteVpc"],
+                pytest_request=request
+            )
 
         pytest.fail(f"No VPC data found.\n\n{diagnostics}")
 
