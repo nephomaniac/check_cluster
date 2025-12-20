@@ -690,10 +690,14 @@ class HTMLReportGenerator:
                     escaped_msg = escape(full_msg)
                     full_failure_message = f'''
                     <div class="detail-section failure-details-section">
-                        <h4 style="color: #e74c3c; margin-bottom: 10px;">⚠️ Failure Details</h4>
-                        <div style="background: #fff5f5; border-left: 4px solid #e74c3c; padding: 15px; margin: 10px 0; border-radius: 4px;">
-                            <pre style="white-space: pre-wrap; font-family: monospace; font-size: 13px; line-height: 1.6; margin: 0; color: #2c3e50;">{escaped_msg}</pre>
-                        </div>
+                        <details open style="margin: 10px 0;">
+                            <summary style="cursor: pointer; font-weight: bold; color: #e74c3c; padding: 8px; background: #fff5f5; border: 1px solid #f8d7da; border-radius: 4px; user-select: none;">
+                                ⚠️ Failure Details
+                            </summary>
+                            <div style="margin-top: 10px; padding: 15px; background: #fff; border: 1px solid #f8d7da; border-radius: 4px;">
+                                <pre style="white-space: pre-wrap; font-family: monospace; font-size: 13px; line-height: 1.6; margin: 0; color: #2c3e50; background: #fff5f5; padding: 15px; border-radius: 4px;">{escaped_msg}</pre>
+                            </div>
+                        </details>
                     </div>'''
 
             html_parts.append(f"""
