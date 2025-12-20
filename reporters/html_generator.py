@@ -650,6 +650,11 @@ class HTMLReportGenerator:
             if outcome in ['failed', 'skipped']:
                 api_requests_html = self._generate_api_requests_html(test)
 
+            # Generate remediation checklist section (for failed/skipped tests)
+            remediation_checklist_html = ''
+            if outcome in ['failed', 'skipped']:
+                remediation_checklist_html = self._generate_remediation_checklist_html(test)
+
             # Extract full failure message for failed tests
             full_failure_message = ''
             if outcome == 'failed':
@@ -704,6 +709,7 @@ class HTMLReportGenerator:
                                         <div class="status-reason {status_class}">{escaped_status_reason}</div>
                                     </div>
                                     {full_failure_message}
+                                    {remediation_checklist_html}
                                     {api_requests_html}
                                     {cloudtrail_html}
                                     {stack_trace_html}
@@ -938,6 +944,159 @@ class HTMLReportGenerator:
                             <pre style="background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 12px; line-height: 1.5; margin: 0; max-height: 400px; overflow-y: auto;"><code>{escape(full_event_json)}</code></pre>
                         </div>
                     </details>
+                </div>
+            ''')
+
+        html_parts.append('''
+            </div>
+        </div>
+        ''')
+
+        return '\n'.join(html_parts)
+
+    def _generate_remediation_checklist_html(self, test: Dict[str, Any]) -> str:
+        """
+        Generate HTML for interactive remediation checklist.
+
+        Shows remediation steps with status indicators (✓/✗/?) and links to related tests.
+
+        Args:
+            test: Test result dictionary from JSON report
+
+        Returns:
+            HTML string for remediation checklist section
+        """
+        from html import escape
+
+        # Check if test has remediation checklist data
+        user_properties = test.get('user_properties', [])
+        remediation_checklist = None
+
+        # Extract remediation checklist from user_properties
+        if user_properties and isinstance(user_properties, list):
+            for prop in user_properties:
+                if isinstance(prop, dict) and 'remediation_checklist' in prop:
+                    remediation_checklist = prop['remediation_checklist']
+                    break
+
+        if not remediation_checklist:
+            return ''  # No remediation checklist available
+
+        resource_type = remediation_checklist.get('resource_type', 'Resource')
+        port = remediation_checklist.get('port', 'N/A')
+        checklist = remediation_checklist.get('checklist', [])
+
+        if not checklist:
+            return ''
+
+        html_parts = []
+        html_parts.append(f'''
+        <div class="detail-section remediation-checklist-section">
+            <h4 style="color: #2c3e50; margin-bottom: 15px;">🔧 Interactive Remediation Checklist for {escape(resource_type)}</h4>
+            <div style="background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px;">
+        ''')
+
+        for category_data in checklist:
+            category = category_data.get('category', 'Unknown Category')
+            checks = category_data.get('checks', [])
+
+            html_parts.append(f'''
+                <div style="margin-bottom: 20px;">
+                    <h5 style="color: #495057; margin-bottom: 10px; font-size: 14px; font-weight: 600;">{escape(category)}</h5>
+                    <ul style="list-style: none; padding-left: 0; margin: 0;">
+            ''')
+
+            for check in checks:
+                description = check.get('description', 'No description')
+                test_name = check.get('test')
+                test_file = check.get('test_file', '')
+                can_validate = check.get('can_validate', False)
+                status = check.get('status', 'unknown')
+                manual_command = check.get('manual_command', '')
+                note = check.get('note', '')
+
+                # Determine status indicator and color
+                if status == 'passed':
+                    status_icon = '✓'
+                    status_color = '#28a745'
+                    status_bg = '#d4edda'
+                    status_text = 'PASSED'
+                elif status == 'failed':
+                    status_icon = '✗'
+                    status_color = '#dc3545'
+                    status_bg = '#f8d7da'
+                    status_text = 'FAILED'
+                elif status == 'error':
+                    status_icon = '⚠'
+                    status_color = '#ff6b35'
+                    status_bg = '#ffe5d9'
+                    status_text = 'ERROR'
+                elif status == 'skipped':
+                    status_icon = '○'
+                    status_color = '#ffc107'
+                    status_bg = '#fff3cd'
+                    status_text = 'SKIPPED'
+                elif status == 'manual':
+                    status_icon = '⚙'
+                    status_color = '#6c757d'
+                    status_bg = '#e9ecef'
+                    status_text = 'MANUAL'
+                else:  # unknown
+                    status_icon = '?'
+                    status_color = '#6c757d'
+                    status_bg = '#e9ecef'
+                    status_text = 'UNKNOWN'
+
+                # Build check HTML
+                html_parts.append(f'''
+                    <li style="margin-bottom: 12px; padding: 10px; background: white; border-left: 4px solid {status_color}; border-radius: 3px;">
+                        <div style="display: flex; align-items: start; gap: 10px;">
+                            <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: {status_bg}; color: {status_color}; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px;">
+                                {status_icon}
+                            </div>
+                            <div style="flex-grow: 1;">
+                                <div style="font-size: 13px; color: #2c3e50; margin-bottom: 4px;">
+                                    {escape(description)}
+                                </div>
+                ''')
+
+                # Add test link if available
+                if can_validate and test_name:
+                    # Create anchor link to test (will need to match test ID in HTML)
+                    # Format: test-{idx}-{test_name.replace('_', '-')}
+                    test_anchor = test_name.replace('_', '-')
+                    html_parts.append(f'''
+                                <div style="font-size: 12px; margin-top: 4px;">
+                                    <span style="background: {status_bg}; color: {status_color}; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 10px; margin-right: 6px;">{status_text}</span>
+                                    <a href="#{test_anchor}" style="color: #007bff; text-decoration: none; font-family: monospace; font-size: 11px;" title="Jump to test: {escape(test_file)}">
+                                        → {escape(test_name)}
+                                    </a>
+                                </div>
+                    ''')
+                elif status == 'manual' and manual_command:
+                    html_parts.append(f'''
+                                <div style="font-size: 12px; margin-top: 4px;">
+                                    <span style="background: {status_bg}; color: {status_color}; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 10px; margin-right: 6px;">{status_text}</span>
+                                    <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 2px; font-size: 11px; color: #495057;">{escape(manual_command)}</code>
+                                </div>
+                    ''')
+
+                # Add note if present
+                if note:
+                    html_parts.append(f'''
+                                <div style="font-size: 11px; color: #6c757d; font-style: italic; margin-top: 4px;">
+                                    ℹ️ {escape(note)}
+                                </div>
+                    ''')
+
+                html_parts.append('''
+                            </div>
+                        </div>
+                    </li>
+                ''')
+
+            html_parts.append('''
+                    </ul>
                 </div>
             ''')
 

@@ -11,6 +11,160 @@ from pathlib import Path
 from models.cluster import ClusterData
 
 
+def get_test_result_status(request, test_name: str) -> str:
+    """
+    Get the outcome of a specific test from the current session.
+
+    Args:
+        request: pytest request fixture
+        test_name: Name of the test to check (e.g., 'test_instances_exist')
+
+    Returns:
+        'passed', 'failed', 'skipped', 'error', or 'unknown'
+    """
+    try:
+        # Access the session to get test results
+        session = request.session
+
+        # Try to find the test in the session's test reports
+        if hasattr(session, 'testscollected') and session.testscollected:
+            for item in session.items:
+                if test_name in item.nodeid:
+                    # Check if this test has been run
+                    if hasattr(item, 'rep_call'):
+                        return item.rep_call.outcome
+                    elif hasattr(item, 'rep_setup'):
+                        return item.rep_setup.outcome
+
+        return 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def build_remediation_checklist(request, resource_type: str = "API Server") -> dict:
+    """
+    Build an interactive remediation checklist with links to related tests.
+
+    Args:
+        request: pytest request fixture
+        resource_type: "API Server" or "MCS"
+
+    Returns:
+        Dictionary with checklist data for HTML rendering
+    """
+    port = "6443" if resource_type == "API Server" else "22623"
+
+    # Define checks that can be validated by tests
+    checklist_items = [
+        {
+            "category": "1. Instance Not Running",
+            "checks": [
+                {
+                    "description": "Verify instances are in running state",
+                    "test": "test_control_plane_instances_running",
+                    "test_file": "tests/test_instances.py",
+                    "can_validate": True
+                },
+                {
+                    "description": "Check CloudTrail for Stop/Terminate events",
+                    "test": "test_no_security_group_revocations",
+                    "test_file": "tests/test_cloudtrail.py",
+                    "can_validate": True,
+                    "note": "CloudTrail events checked during this test"
+                }
+            ]
+        },
+        {
+            "category": f"2. Security Group Blocking Port {port}",
+            "checks": [
+                {
+                    "description": f"Verify security groups allow TCP {port}",
+                    "test": "test_controlplane_api_server_access",
+                    "test_file": "tests/test_security_groups_detailed.py",
+                    "can_validate": True
+                },
+                {
+                    "description": "Check for RevokeSecurityGroupIngress events",
+                    "test": "test_no_security_group_revocations",
+                    "test_file": "tests/test_cloudtrail.py",
+                    "can_validate": True
+                }
+            ]
+        },
+        {
+            "category": f"3. {resource_type} Not Responding",
+            "checks": [
+                {
+                    "description": "SSH to instance and check service status",
+                    "test": None,
+                    "can_validate": False,
+                    "manual_command": f"ssh core@<instance-ip> sudo crictl ps | grep {resource_type.lower().replace(' ', '-')}"
+                },
+                {
+                    "description": "View service logs",
+                    "test": None,
+                    "can_validate": False,
+                    "manual_command": "ssh core@<instance-ip> sudo crictl logs <container-id>"
+                }
+            ]
+        },
+        {
+            "category": "4. etcd Not Available" if resource_type == "API Server" else "4. Bootstrap Not Complete",
+            "checks": [
+                {
+                    "description": "Check etcd status" if resource_type == "API Server" else "Check bootstrap status",
+                    "test": None,
+                    "can_validate": False,
+                    "manual_command": "ssh core@<instance-ip> sudo crictl ps | grep etcd" if resource_type == "API Server" else "ssh core@<instance-ip> sudo systemctl status bootkube.service"
+                }
+            ]
+        },
+        {
+            "category": "5. Network Connectivity",
+            "checks": [
+                {
+                    "description": "Verify route tables configuration",
+                    "test": "test_private_route_to_nat_gateway",
+                    "test_file": "tests/test_network.py",
+                    "can_validate": True
+                },
+                {
+                    "description": "Verify public routes to internet gateway",
+                    "test": "test_public_route_to_internet_gateway",
+                    "test_file": "tests/test_network.py",
+                    "can_validate": True
+                },
+                {
+                    "description": "Verify subnet configuration",
+                    "test": "test_subnets_exist",
+                    "test_file": "tests/test_network.py",
+                    "can_validate": True
+                },
+                {
+                    "description": "Check Network ACLs",
+                    "test": "test_network_acls_exist",
+                    "test_file": "tests/test_network.py",
+                    "can_validate": True
+                }
+            ]
+        }
+    ]
+
+    # Get test results for each check
+    for category in checklist_items:
+        for check in category["checks"]:
+            if check["can_validate"] and check.get("test"):
+                check["status"] = get_test_result_status(request, check["test"])
+            else:
+                check["status"] = "manual"
+
+    return {
+        "resource_type": resource_type,
+        "port": port,
+        "checklist": checklist_items
+    }
+
+
 def get_target_health_files(cluster_data: ClusterData) -> dict:
     """Get all target health files for the cluster"""
     target_health_files = {}
@@ -268,21 +422,27 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
                     f"{full_message}"
                 )
 
-        # Summary of common issues
+        # Build interactive remediation checklist
+        checklist_data = build_remediation_checklist(request, resource_type="API Server")
+
+        # Store checklist in user_properties for HTML rendering
+        request.node.user_properties.append(("remediation_checklist", checklist_data))
+
+        # Summary of common issues (text version for console)
         remediation = []
         remediation.append("\n" + "="*80)
         remediation.append("COMMON CAUSES AND REMEDIATION")
         remediation.append("="*80)
         remediation.append("""
+NOTE: See HTML report for interactive checklist with test result links and status indicators.
+
 1. Instance Not Running
-   - Check instance state in EC2 console
-   - Review CloudTrail for Stop/Terminate events
-   - Check for auto-scaling terminations
+   - Check instance state in EC2 console → See test_control_plane_instances_running
+   - Review CloudTrail for Stop/Terminate events → Checked in this test
 
 2. Security Group Blocking Port 6443
-   - Verify security group rules allow TCP 6443 from load balancer subnets
-   - Check for RevokeSecurityGroupIngress events in CloudTrail
-   - Review security group changes during installation
+   - Verify security group rules allow TCP 6443 → See test_controlplane_api_server_access
+   - Check for RevokeSecurityGroupIngress events → See test_no_security_group_revocations
 
 3. API Server Not Responding
    - SSH to instance: ssh core@<instance-ip>
@@ -296,9 +456,10 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
    - View etcd logs: sudo crictl logs <etcd-container-id>
 
 5. Network Connectivity
-   - Verify route tables allow traffic from load balancer subnets
-   - Check Network ACLs aren't blocking traffic
-   - Verify subnet configuration
+   - Verify route tables → See test_private_route_to_nat_gateway
+   - Verify public routes → See test_public_route_to_internet_gateway
+   - Verify subnet configuration → See test_subnets_exist
+   - Check Network ACLs → See test_network_acls_exist
 
 For detailed diagnostics, see the Root Cause Analysis section above for each instance.
         """)
@@ -515,21 +676,27 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
                     f"{full_message}"
                 )
 
-        # Summary of common issues
+        # Build interactive remediation checklist
+        checklist_data = build_remediation_checklist(request, resource_type="MCS")
+
+        # Store checklist in user_properties for HTML rendering
+        request.node.user_properties.append(("remediation_checklist", checklist_data))
+
+        # Summary of common issues (text version for console)
         remediation = []
         remediation.append("\n" + "="*80)
         remediation.append("COMMON CAUSES AND REMEDIATION")
         remediation.append("="*80)
         remediation.append("""
+NOTE: See HTML report for interactive checklist with test result links and status indicators.
+
 1. Instance Not Running
-   - Check instance state in EC2 console
-   - Review CloudTrail for Stop/Terminate events
-   - Check for auto-scaling terminations
+   - Check instance state in EC2 console → See test_control_plane_instances_running
+   - Review CloudTrail for Stop/Terminate events → Checked in this test
 
 2. Security Group Blocking Port 22623
-   - Verify security group rules allow TCP 22623 from load balancer subnets
-   - Check for RevokeSecurityGroupIngress events in CloudTrail
-   - Review security group changes during installation
+   - Verify security group rules allow TCP 22623 → See test_controlplane_api_server_access
+   - Check for RevokeSecurityGroupIngress events → See test_no_security_group_revocations
 
 3. MCS Not Responding
    - SSH to instance: ssh core@<instance-ip>
@@ -543,9 +710,10 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
    - View bootstrap logs: sudo journalctl -u bootkube.service
 
 5. Network Connectivity
-   - Verify route tables allow traffic from load balancer subnets
-   - Check Network ACLs aren't blocking traffic
-   - Verify subnet configuration
+   - Verify route tables → See test_private_route_to_nat_gateway
+   - Verify public routes → See test_public_route_to_internet_gateway
+   - Verify subnet configuration → See test_subnets_exist
+   - Check Network ACLs → See test_network_acls_exist
 
 For detailed diagnostics, see the Root Cause Analysis section above for each instance.
         """)
