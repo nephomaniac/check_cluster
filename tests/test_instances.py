@@ -217,7 +217,7 @@ def test_instances_exist(cluster_data: ClusterData):
 
 
 @pytest.mark.instances
-def test_control_plane_instances_running(cluster_data: ClusterData):
+def test_control_plane_instances_running(cluster_data: ClusterData, request):
     """Control plane instances must be in running state.
 
     Why: Control plane instances host the Kubernetes API server, etcd, and other critical
@@ -366,59 +366,35 @@ def test_control_plane_instances_running(cluster_data: ClusterData):
         print(json.dumps({"State": {"Name": "running", "Code": 16}}, indent=2))
         print("─"*80)
 
-        # Search CloudTrail for events related to non-running instances
-        print("\n" + "="*80)
-        print("CloudTrail Investigation - Control Plane Instance State Changes")
-        print("="*80)
+        # Correlate CloudTrail events for non-running instances
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
 
-        for instance in masters:
-            instance_id = instance.get('InstanceId', 'unknown')
-            state_data = instance.get('State', 'unknown')
+        non_running_instance_ids = [inst.get('InstanceId') for inst in masters
+                                     if (isinstance(inst.get('State'), dict) and inst.get('State', {}).get('Name') != 'running')
+                                     or (isinstance(inst.get('State'), str) and inst.get('State') != 'running')]
 
-            if isinstance(state_data, dict):
-                state = state_data.get('Name', 'unknown')
-            else:
-                state = state_data
+        if non_running_instance_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=non_running_instance_ids,
+                resource_type="EC2 Instance",
+                event_types=["Terminate", "Stop"],
+                pytest_request=request
+            )
 
-            if state != 'running':
-                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                instance_name = tags.get('Name', 'unknown')
-
-                print(f"\nSearching CloudTrail for {instance_name} ({instance_id})...")
-                cloudtrail_results = search_cloudtrail_for_instance(cluster_data, instance_id)
-
-                if cloudtrail_results['found']:
-                    print(f"✓ Found {cloudtrail_results['count']} CloudTrail event(s):")
-
-                    # Determine what the events show
-                    event_names = [e.get('EventName', '') for e in cloudtrail_results['events']]
-                    if 'TerminateInstances' in event_names:
-                        action_desc = "showing instance was terminated"
-                    elif 'StopInstances' in event_names:
-                        action_desc = "showing instance was stopped"
-                    elif 'RunInstances' in event_names:
-                        action_desc = "showing instance was created/launched"
-                    else:
-                        action_desc = "showing instance state change events"
-
-                    print("\n" + "─"*80)
-                    print(f"CLOUDTRAIL API LOGS - {action_desc.upper()}")
-                    print(f"Instance: {instance_name} ({instance_id})")
-                    print(f"Relevance: Identifies WHO changed instance state, WHEN it occurred, and WHY (if error)")
-                    print("Key fields: EventName (API call), EventTime, Username (IAM identity), ErrorCode")
-                    print("─"*80)
-                    print(json.dumps(cloudtrail_results['events'], indent=2, default=str))
-                    print("─"*80)
-                else:
-                    print(f"✗ {cloudtrail_results['message']}")
-
-        print("="*80 + "\n")
+            # Print CloudTrail analysis
+            if ct_result['found_events']:
+                print("\n" + "="*80)
+                print("CloudTrail Analysis - Control Plane Instance State Changes")
+                print("="*80)
+                print(ct_result['formatted_message'])
+                print("="*80 + "\n")
 
         assert False, f"Control plane instances not running: {', '.join(non_running)}"
 
 
 @pytest.mark.instances
-def test_worker_instances_running(cluster_data: ClusterData):
+def test_worker_instances_running(cluster_data: ClusterData, request):
     """Worker instances must be in running state.
 
     Why: Worker nodes run application workloads and cluster operators. Non-running workers
@@ -567,53 +543,29 @@ def test_worker_instances_running(cluster_data: ClusterData):
         print(json.dumps({"State": {"Name": "running", "Code": 16}}, indent=2))
         print("─"*80)
 
-        # Search CloudTrail for events related to non-running instances
-        print("\n" + "="*80)
-        print("CloudTrail Investigation - Worker Instance State Changes")
-        print("="*80)
+        # Correlate CloudTrail events for non-running instances
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
 
-        for instance in workers:
-            instance_id = instance.get('InstanceId', 'unknown')
-            state_data = instance.get('State', 'unknown')
+        non_running_instance_ids = [inst.get('InstanceId') for inst in workers
+                                     if (isinstance(inst.get('State'), dict) and inst.get('State', {}).get('Name') != 'running')
+                                     or (isinstance(inst.get('State'), str) and inst.get('State') != 'running')]
 
-            if isinstance(state_data, dict):
-                state = state_data.get('Name', 'unknown')
-            else:
-                state = state_data
+        if non_running_instance_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=non_running_instance_ids,
+                resource_type="EC2 Instance",
+                event_types=["Terminate", "Stop"],
+                pytest_request=request
+            )
 
-            if state != 'running':
-                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                instance_name = tags.get('Name', 'unknown')
-
-                print(f"\nSearching CloudTrail for {instance_name} ({instance_id})...")
-                cloudtrail_results = search_cloudtrail_for_instance(cluster_data, instance_id)
-
-                if cloudtrail_results['found']:
-                    print(f"✓ Found {cloudtrail_results['count']} CloudTrail event(s):")
-
-                    # Determine what the events show
-                    event_names = [e.get('EventName', '') for e in cloudtrail_results['events']]
-                    if 'TerminateInstances' in event_names:
-                        action_desc = "showing instance was terminated"
-                    elif 'StopInstances' in event_names:
-                        action_desc = "showing instance was stopped"
-                    elif 'RunInstances' in event_names:
-                        action_desc = "showing instance was created/launched"
-                    else:
-                        action_desc = "showing instance state change events"
-
-                    print("\n" + "─"*80)
-                    print(f"CLOUDTRAIL API LOGS - {action_desc.upper()}")
-                    print(f"Instance: {instance_name} ({instance_id})")
-                    print(f"Relevance: Identifies WHO changed instance state, WHEN it occurred, and WHY (if error)")
-                    print("Key fields: EventName (API call), EventTime, Username (IAM identity), ErrorCode")
-                    print("─"*80)
-                    print(json.dumps(cloudtrail_results['events'], indent=2, default=str))
-                    print("─"*80)
-                else:
-                    print(f"✗ {cloudtrail_results['message']}")
-
-        print("="*80 + "\n")
+            # Print CloudTrail analysis
+            if ct_result['found_events']:
+                print("\n" + "="*80)
+                print("CloudTrail Analysis - Worker Instance State Changes")
+                print("="*80)
+                print(ct_result['formatted_message'])
+                print("="*80 + "\n")
 
         assert False, f"Worker instances not running: {', '.join(non_running)}"
 
@@ -785,7 +737,7 @@ def test_instances_have_cluster_tags(cluster_data: ClusterData):
 
 
 @pytest.mark.instances
-def test_infra_instances_running(cluster_data: ClusterData):
+def test_infra_instances_running(cluster_data: ClusterData, request):
     """Infra instances must be in running state.
 
     Why: Infra nodes run critical cluster infrastructure components including the ingress router,
@@ -935,53 +887,29 @@ def test_infra_instances_running(cluster_data: ClusterData):
         print(json.dumps({"State": {"Name": "running", "Code": 16}}, indent=2))
         print("─"*80)
 
-        # Search CloudTrail for events related to non-running instances
-        print("\n" + "="*80)
-        print("CloudTrail Investigation - Infra Instance State Changes")
-        print("="*80)
+        # Correlate CloudTrail events for non-running instances
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
 
-        for instance in infras:
-            instance_id = instance.get('InstanceId', 'unknown')
-            state_data = instance.get('State', 'unknown')
+        non_running_instance_ids = [inst.get('InstanceId') for inst in infras
+                                     if (isinstance(inst.get('State'), dict) and inst.get('State', {}).get('Name') != 'running')
+                                     or (isinstance(inst.get('State'), str) and inst.get('State') != 'running')]
 
-            if isinstance(state_data, dict):
-                state = state_data.get('Name', 'unknown')
-            else:
-                state = state_data
+        if non_running_instance_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=non_running_instance_ids,
+                resource_type="EC2 Instance",
+                event_types=["Terminate", "Stop"],
+                pytest_request=request
+            )
 
-            if state != 'running':
-                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                instance_name = tags.get('Name', 'unknown')
-
-                print(f"\nSearching CloudTrail for {instance_name} ({instance_id})...")
-                cloudtrail_results = search_cloudtrail_for_instance(cluster_data, instance_id)
-
-                if cloudtrail_results['found']:
-                    print(f"✓ Found {cloudtrail_results['count']} CloudTrail event(s):")
-
-                    # Determine what the events show
-                    event_names = [e.get('EventName', '') for e in cloudtrail_results['events']]
-                    if 'TerminateInstances' in event_names:
-                        action_desc = "showing instance was terminated"
-                    elif 'StopInstances' in event_names:
-                        action_desc = "showing instance was stopped"
-                    elif 'RunInstances' in event_names:
-                        action_desc = "showing instance was created/launched"
-                    else:
-                        action_desc = "showing instance state change events"
-
-                    print("\n" + "─"*80)
-                    print(f"CLOUDTRAIL API LOGS - {action_desc.upper()}")
-                    print(f"Instance: {instance_name} ({instance_id})")
-                    print(f"Relevance: Identifies WHO changed instance state, WHEN it occurred, and WHY (if error)")
-                    print("Key fields: EventName (API call), EventTime, Username (IAM identity), ErrorCode")
-                    print("─"*80)
-                    print(json.dumps(cloudtrail_results['events'], indent=2, default=str))
-                    print("─"*80)
-                else:
-                    print(f"✗ {cloudtrail_results['message']}")
-
-        print("="*80 + "\n")
+            # Print CloudTrail analysis
+            if ct_result['found_events']:
+                print("\n" + "="*80)
+                print("CloudTrail Analysis - Infra Instance State Changes")
+                print("="*80)
+                print(ct_result['formatted_message'])
+                print("="*80 + "\n")
 
         assert False, f"Infra instances not running: {', '.join(non_running)}"
 
