@@ -133,9 +133,11 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
 
     if unhealthy_targets:
         # Enhanced diagnostics with root cause analysis
-        print("\n" + "="*80)
-        print(f"CRITICAL: Found {len(unhealthy_targets)} unhealthy API server targets")
-        print("="*80)
+        # Build message for both print and pytest.fail() to ensure visibility
+        message_parts = []
+        message_parts.append("\n" + "="*80)
+        message_parts.append(f"CRITICAL: Found {len(unhealthy_targets)} unhealthy API server targets")
+        message_parts.append("="*80)
 
         details = []
         resource_ids = []
@@ -230,12 +232,14 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
                 for cause in root_causes:
                     details.append(f"  ❌ {cause}")
 
-        print("\n".join(details))
-        print("\n" + "="*80)
+        # Add details to message
+        message_parts.extend(details)
+        message_parts.append("\n" + "="*80)
 
         # Correlate CloudTrail events for unhealthy/deregistered targets
         from utils.test_helpers import correlate_cloudtrail_events_for_resources
 
+        cloudtrail_message = []
         if resource_ids:
             ct_result = correlate_cloudtrail_events_for_resources(
                 cluster_data=cluster_data,
@@ -245,27 +249,31 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
                 pytest_request=request
             )
 
-            # Print CloudTrail findings
+            # Add CloudTrail findings to message
             if ct_result['found_events']:
-                print("\n" + "="*80)
-                print("CloudTrail Analysis - Events Related to Unhealthy Targets")
-                print("="*80)
-                print(ct_result['formatted_message'])
-                print("="*80 + "\n")
+                cloudtrail_message.append("\n" + "="*80)
+                cloudtrail_message.append("CloudTrail Analysis - Events Related to Unhealthy Targets")
+                cloudtrail_message.append("="*80)
+                cloudtrail_message.append(ct_result['formatted_message'])
+                cloudtrail_message.append("="*80 + "\n")
+                message_parts.extend(cloudtrail_message)
 
             # If only installer role events, treat as informational
             if ct_result.get('only_installer_events'):
+                # Build full message for skip
+                full_message = "\n".join(message_parts)
                 pytest.skip(
                     f"INFORMATIONAL: API server targets unhealthy, but CloudTrail shows "
                     f"only installer role activity (expected during cluster installation).\n\n"
-                    f"Found {len(unhealthy_targets)} unhealthy API server targets - see output above for details."
+                    f"{full_message}"
                 )
 
         # Summary of common issues
-        print("\n" + "="*80)
-        print("COMMON CAUSES AND REMEDIATION")
-        print("="*80)
-        print("""
+        remediation = []
+        remediation.append("\n" + "="*80)
+        remediation.append("COMMON CAUSES AND REMEDIATION")
+        remediation.append("="*80)
+        remediation.append("""
 1. Instance Not Running
    - Check instance state in EC2 console
    - Review CloudTrail for Stop/Terminate events
@@ -294,11 +302,12 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
 
 For detailed diagnostics, see the Root Cause Analysis section above for each instance.
         """)
-        print("="*80 + "\n")
+        remediation.append("="*80 + "\n")
+        message_parts.extend(remediation)
 
-        pytest.fail(
-            f"Found {len(unhealthy_targets)} unhealthy API server targets - see detailed diagnostics above"
-        )
+        # Build final message and fail
+        full_message = "\n".join(message_parts)
+        pytest.fail(full_message)
 
 
 @pytest.mark.load_balancers
@@ -371,9 +380,11 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
 
     if unhealthy_targets:
         # Enhanced diagnostics with root cause analysis
-        print("\n" + "="*80)
-        print(f"HIGH: Found {len(unhealthy_targets)} unhealthy MCS targets")
-        print("="*80)
+        # Build message for both print and pytest.fail() to ensure visibility
+        message_parts = []
+        message_parts.append("\n" + "="*80)
+        message_parts.append(f"HIGH: Found {len(unhealthy_targets)} unhealthy MCS targets")
+        message_parts.append("="*80)
 
         details = []
         resource_ids = []
@@ -468,12 +479,14 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
                 for cause in root_causes:
                     details.append(f"  ❌ {cause}")
 
-        print("\n".join(details))
-        print("\n" + "="*80)
+        # Add details to message
+        message_parts.extend(details)
+        message_parts.append("\n" + "="*80)
 
         # Correlate CloudTrail events for unhealthy/deregistered targets
         from utils.test_helpers import correlate_cloudtrail_events_for_resources
 
+        cloudtrail_message = []
         if resource_ids:
             ct_result = correlate_cloudtrail_events_for_resources(
                 cluster_data=cluster_data,
@@ -483,27 +496,31 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
                 pytest_request=request
             )
 
-            # Print CloudTrail findings
+            # Add CloudTrail findings to message
             if ct_result['found_events']:
-                print("\n" + "="*80)
-                print("CloudTrail Analysis - Events Related to Unhealthy Targets")
-                print("="*80)
-                print(ct_result['formatted_message'])
-                print("="*80 + "\n")
+                cloudtrail_message.append("\n" + "="*80)
+                cloudtrail_message.append("CloudTrail Analysis - Events Related to Unhealthy Targets")
+                cloudtrail_message.append("="*80)
+                cloudtrail_message.append(ct_result['formatted_message'])
+                cloudtrail_message.append("="*80 + "\n")
+                message_parts.extend(cloudtrail_message)
 
             # If only installer role events, treat as informational
             if ct_result.get('only_installer_events'):
+                # Build full message for skip
+                full_message = "\n".join(message_parts)
                 pytest.skip(
                     f"INFORMATIONAL: MCS targets unhealthy, but CloudTrail shows "
                     f"only installer role activity (expected during cluster installation).\n\n"
-                    f"Found {len(unhealthy_targets)} unhealthy MCS targets - see output above for details."
+                    f"{full_message}"
                 )
 
         # Summary of common issues
-        print("\n" + "="*80)
-        print("COMMON CAUSES AND REMEDIATION")
-        print("="*80)
-        print("""
+        remediation = []
+        remediation.append("\n" + "="*80)
+        remediation.append("COMMON CAUSES AND REMEDIATION")
+        remediation.append("="*80)
+        remediation.append("""
 1. Instance Not Running
    - Check instance state in EC2 console
    - Review CloudTrail for Stop/Terminate events
@@ -532,11 +549,12 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
 
 For detailed diagnostics, see the Root Cause Analysis section above for each instance.
         """)
-        print("="*80 + "\n")
+        remediation.append("="*80 + "\n")
+        message_parts.extend(remediation)
 
-        pytest.fail(
-            f"Found {len(unhealthy_targets)} unhealthy MCS targets - see detailed diagnostics above"
-        )
+        # Build final message and fail
+        full_message = "\n".join(message_parts)
+        pytest.fail(full_message)
 
 
 @pytest.mark.load_balancers
