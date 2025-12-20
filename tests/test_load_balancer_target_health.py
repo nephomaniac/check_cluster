@@ -65,6 +65,13 @@ def build_remediation_checklist(request, resource_type: str = "API Server") -> d
                     "can_validate": True
                 },
                 {
+                    "description": "Analyze bootstrap completion status",
+                    "test": "test_bootstrap_detailed_analysis",
+                    "test_file": "tests/test_installation_diagnostics.py",
+                    "can_validate": True,
+                    "note": "Parses console logs to determine bootstrap stage and failures"
+                },
+                {
                     "description": "Check CloudTrail for Stop/Terminate events",
                     "test": None,
                     "can_validate": False,
@@ -92,6 +99,13 @@ def build_remediation_checklist(request, resource_type: str = "API Server") -> d
         {
             "category": f"3. {resource_type} Not Responding",
             "checks": [
+                {
+                    "description": "Analyze API server initialization from console logs" if resource_type == "API Server" else "Analyze MCS initialization from console logs",
+                    "test": "test_api_server_initialization_diagnostics" if resource_type == "API Server" else None,
+                    "test_file": "tests/test_installation_diagnostics.py" if resource_type == "API Server" else None,
+                    "can_validate": True if resource_type == "API Server" else False,
+                    "note": "Deep analysis of console logs for API server startup" if resource_type == "API Server" else "MCS diagnostics not yet implemented"
+                },
                 {
                     "description": "SSH to instance and check service status",
                     "test": None,
