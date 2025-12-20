@@ -279,7 +279,15 @@ class HTMLReportGenerator:
 
             # Look for Failed: message (from pytest.fail())
             if 'Failed: ' in longrepr:
-                return longrepr.split('Failed: ')[-1].split('\n')[0]
+                # Get the message after "Failed: " and find the first meaningful line
+                failure_message = longrepr.split('Failed: ')[-1]
+                for line in failure_message.split('\n'):
+                    line = line.strip()
+                    # Skip empty lines and separator lines (=== or ---)
+                    if line and not line.startswith('===') and not line.startswith('---'):
+                        return line
+                # If no meaningful line found, return first line anyway
+                return failure_message.split('\n')[0]
 
             # Look for E   lines which mark actual error in pytest output
             lines = longrepr.split('\n')
@@ -288,10 +296,17 @@ class HTMLReportGenerator:
                     # Extract error message without the E prefix
                     return line[4:].strip()
 
-            # Last resort: take first non-empty line that doesn't look like code
+            # Last resort: take first non-empty line that doesn't look like code or separators
             for line in lines:
                 line = line.strip()
-                if line and not line.startswith('>') and not line.startswith('def ') and '=' not in line[:50]:
+                # Skip empty, code markers, separators, and lines with assignments
+                if (line and
+                    not line.startswith('>') and
+                    not line.startswith('def ') and
+                    not line.startswith('===') and
+                    not line.startswith('---') and
+                    not all(c in '=─' for c in line) and  # Skip lines of just separators
+                    '=' not in line[:50]):
                     return line[:200]
 
             return longrepr[:200]
