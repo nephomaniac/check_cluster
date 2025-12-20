@@ -283,11 +283,15 @@ class HTMLReportGenerator:
                 failure_message = longrepr.split('Failed: ')[-1]
                 for line in failure_message.split('\n'):
                     line = line.strip()
-                    # Skip empty lines and separator lines (=== or ---)
-                    if line and not line.startswith('===') and not line.startswith('---'):
+                    # Skip empty lines and separator lines
+                    if line:
+                        # Skip if line is all separator characters (=, ─, -, etc.)
+                        if all(c in '=─-' for c in line):
+                            continue
+                        # This is a meaningful line, return it
                         return line
-                # If no meaningful line found, return first line anyway
-                return failure_message.split('\n')[0]
+                # If no meaningful line found, return error indicator
+                return 'Test failed - see details below'
 
             # Look for E   lines which mark actual error in pytest output
             lines = longrepr.split('\n')
