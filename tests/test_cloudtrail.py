@@ -67,7 +67,7 @@ def test_cloudtrail_events_exist(cluster_data: ClusterData):
 
 
 @pytest.mark.cloudtrail
-def test_no_security_group_revocations(cluster_data: ClusterData):
+def test_no_security_group_revocations(cluster_data: ClusterData, request):
     """Security group rules should not be revoked (indicates potential issues)
 
     Why: Security group rule revocations during cluster installation can break
@@ -105,6 +105,8 @@ def test_no_security_group_revocations(cluster_data: ClusterData):
 
     if revoke_events:
         details = []
+        security_group_ids = []
+
         for event in revoke_events[:10]:  # Show first 10
             event_name = event.get('EventName', 'unknown')
             event_time = event.get('EventTime', 'unknown')
@@ -119,6 +121,9 @@ def test_no_security_group_revocations(cluster_data: ClusterData):
 
                 # Extract details about what was revoked
                 group_id = request_params.get('groupId', 'unknown')
+                if group_id != 'unknown':
+                    security_group_ids.append(group_id)
+
                 ip_permissions = request_params.get('ipPermissions', {})
 
                 # Build a summary of what was revoked
@@ -163,6 +168,17 @@ def test_no_security_group_revocations(cluster_data: ClusterData):
             except (json.JSONDecodeError, KeyError) as e:
                 # Fallback to basic info if parsing fails
                 details.append(f"{event_time} - {event_name} by {user}")
+
+        # Correlate CloudTrail events for HTML display
+        from utils.test_helpers import correlate_cloudtrail_events_for_resources
+        if security_group_ids:
+            ct_result = correlate_cloudtrail_events_for_resources(
+                cluster_data=cluster_data,
+                resource_identifiers=security_group_ids,
+                resource_type="Security Group",
+                event_types=["Revoke"],
+                pytest_request=request
+            )
 
         pytest.fail(
             f"Found {len(revoke_events)} security group revoke events:\n" +

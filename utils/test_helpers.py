@@ -281,3 +281,145 @@ def explain_missing_data(
         )
 
     return "\n".join(explanations)
+
+
+def correlate_cloudtrail_events_for_resources(
+    cluster_data: ClusterData,
+    resource_identifiers: List[str],
+    resource_type: str,
+    event_types: Optional[List[str]] = None,
+    pytest_request: Any = None
+) -> Dict[str, Any]:
+    """
+    Find and attach CloudTrail events for specific resources to test results.
+
+    This is the PRIMARY function tests should use to correlate CloudTrail events
+    with missing, deleted, terminated, or revoked AWS resources.
+
+    Args:
+        cluster_data: ClusterData instance
+        resource_identifiers: List of resource IDs/names/ARNs to find events for
+        resource_type: Human-readable resource type (e.g., "Security Group", "EC2 Instance")
+        event_types: Optional list of event patterns to filter (e.g., ["Delete", "Terminate", "Revoke"])
+        pytest_request: pytest request fixture (for attaching events to user_properties)
+
+    Returns:
+        Dictionary with 'events' (list of event dicts) and 'formatted_message' (str)
+
+    Example:
+        # In a test that finds deleted security groups:
+        result = correlate_cloudtrail_events_for_resources(
+            cluster_data=cluster_data,
+            resource_identifiers=["sg-abc123", "sg-def456"],
+            resource_type="Security Group",
+            event_types=["Revoke", "Delete"],
+            pytest_request=request
+        )
+
+        # Include in failure message:
+        pytest.fail(f"Found deleted security groups:\\n{result['formatted_message']}")
+    """
+    from utils.cloudtrail_correlator import create_correlator_from_cluster_data
+
+    correlator = create_correlator_from_cluster_data(cluster_data)
+
+    if not correlator:
+        return {
+            'events': [],
+            'formatted_message': 'CloudTrail data not available for correlation',
+            'found_events': False
+        }
+
+    all_events = []
+    event_summaries = []
+
+    # Find events for each resource
+    for resource_id in resource_identifiers:
+        events = correlator.find_events_for_resource(
+            resource_identifier=resource_id,
+            event_types=event_types,
+            limit=5
+        )
+
+        for event in events:
+            # Create event summary for HTML display
+            event_summary = {
+                'category': event.get_event_category(),
+                'event_name': event.event_name,
+                'event_time': event.event_time,
+                'username': event.username,
+                'resource_id': resource_id,
+                'summary': _format_event_summary(event, resource_id, resource_type),
+                'file': event.source_file,
+                'index': event.event_index
+            }
+            event_summaries.append(event_summary)
+            all_events.append(event)
+
+    # Format message for test failure output
+    if not all_events:
+        formatted_message = f"No CloudTrail events found for {len(resource_identifiers)} {resource_type}(s)"
+    else:
+        lines = [f"CloudTrail Analysis - Found {len(all_events)} event(s):"]
+        for i, summary in enumerate(event_summaries[:10], 1):  # Show first 10
+            lines.append(
+                f"\n{i}. [{summary['category']}] {summary['event_name']}"
+            )
+            lines.append(f"   Time: {summary['event_time']}")
+            lines.append(f"   User: {summary['username']}")
+            lines.append(f"   Resource: {summary['resource_id']}")
+            lines.append(f"   Details: {summary['summary']}")
+
+        if len(all_events) > 10:
+            lines.append(f"\n... and {len(all_events) - 10} more event(s)")
+
+        formatted_message = "\n".join(lines)
+
+    # Attach to pytest user_properties for HTML display
+    if pytest_request and event_summaries:
+        pytest_request.node.user_properties.append(("cloudtrail_events", event_summaries))
+
+    return {
+        'events': all_events,
+        'event_summaries': event_summaries,
+        'formatted_message': formatted_message,
+        'found_events': len(all_events) > 0
+    }
+
+
+def _format_event_summary(event: Any, resource_id: str, resource_type: str) -> str:
+    """
+    Format a CloudTrail event into a human-readable summary.
+
+    Args:
+        event: CloudTrailEvent instance
+        resource_id: Resource identifier
+        resource_type: Resource type name
+
+    Returns:
+        Formatted summary string
+    """
+    category = event.get_event_category()
+
+    if category == "Deletion":
+        return f"{resource_type} {resource_id} was deleted"
+    elif category == "Revocation":
+        # Try to extract what was revoked
+        if hasattr(event, 'request_parameters') and event.request_parameters:
+            ip_perms = event.request_parameters.get('ipPermissions', {})
+            if ip_perms:
+                items = ip_perms.get('items', [])
+                if items:
+                    return f"{resource_type} {resource_id} had {len(items)} rule(s) revoked"
+        return f"{resource_type} {resource_id} had permissions revoked"
+    elif category == "Creation Failed":
+        error_msg = event.error_message or event.error_code or "Unknown error"
+        return f"Failed to create {resource_type}: {error_msg}"
+    elif "Terminate" in event.event_name:
+        return f"{resource_type} {resource_id} was terminated"
+    elif "Detach" in event.event_name:
+        return f"{resource_type} {resource_id} was detached"
+    elif "Disassociate" in event.event_name:
+        return f"{resource_type} {resource_id} was disassociated"
+    else:
+        return f"{event.event_name} performed on {resource_type} {resource_id}"
