@@ -147,7 +147,7 @@ def test_api_server_targets_healthy(cluster_data: ClusterData, request):
         # Get security groups for analysis
         security_groups_by_id = {}
         if cluster_data.security_groups:
-            for sg in cluster_data.security_groups:
+            for sg in cluster_data.security_groups.get('SecurityGroups', []):
                 security_groups_by_id[sg.get('GroupId')] = sg
 
         for target in unhealthy_targets:
@@ -385,7 +385,7 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
         # Get security groups for analysis
         security_groups_by_id = {}
         if cluster_data.security_groups:
-            for sg in cluster_data.security_groups:
+            for sg in cluster_data.security_groups.get('SecurityGroups', []):
                 security_groups_by_id[sg.get('GroupId')] = sg
 
         for target in unhealthy_targets:
