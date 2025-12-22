@@ -7,6 +7,46 @@ Validates VPC DNS settings, DHCP options, and network configuration for ROSA clu
 import json
 import pytest
 from models.cluster import ClusterData
+from utils.test_helpers import check_resource_in_api_requests
+
+
+def format_api_request_error(cluster_data: ClusterData, operation: str, service: str = "ec2") -> str:
+    """
+    Format API request error information for display.
+
+    Args:
+        cluster_data: ClusterData instance
+        operation: AWS API operation name (e.g., "describe_vpcs")
+        service: AWS service name (e.g., "ec2")
+
+    Returns:
+        Formatted error string with request details
+    """
+    req_info = check_resource_in_api_requests(cluster_data, operation, service)
+
+    if not req_info:
+        return "No API request information available (api_requests.json not found or operation not logged)"
+
+    if req_info['success']:
+        return f"API request succeeded but resource not found in results (operation: {service}.{operation}, timestamp: {req_info['timestamp']})"
+
+    # Request failed - show error details
+    error = req_info.get('error', {})
+    error_code = error.get('code', 'Unknown')
+    error_message = error.get('message', 'No error message')
+    timestamp = req_info.get('timestamp', 'Unknown')
+    duration_ms = req_info.get('duration_ms', 0)
+
+    error_info = {
+        "AWSErrorCode": error_code,
+        "ErrorMessage": error_message,
+        "Timestamp": timestamp,
+        "Duration": f"{duration_ms}ms",
+        "Service": service,
+        "Operation": operation
+    }
+
+    return json.dumps(error_info, indent=2)
 
 
 @pytest.mark.vpc
@@ -86,7 +126,15 @@ def test_vpc_exists(cluster_data: ClusterData, request):
     print(json.dumps(vpc_summary, indent=2))
     print("─"*80)
 
-    assert len(vpc_data) > 0, "No VPCs configured"
+    if len(vpc_data) == 0:
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_vpcs", "ec2"))
+        print(f"{'─'*80}\n")
+
+    assert len(vpc_data) > 0, "No VPCs configured - see AWS API request error details above"
 
 
 @pytest.mark.vpc
