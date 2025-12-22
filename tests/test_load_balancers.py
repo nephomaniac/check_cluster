@@ -9,6 +9,46 @@ import pytest
 import json
 from pathlib import Path
 from models.cluster import ClusterData
+from utils.test_helpers import check_resource_in_api_requests
+
+
+def format_api_request_error(cluster_data: ClusterData, operation: str, service: str = "elbv2") -> str:
+    """
+    Format API request error information for display.
+
+    Args:
+        cluster_data: ClusterData instance
+        operation: AWS API operation name (e.g., "describe_load_balancers")
+        service: AWS service name (e.g., "elbv2")
+
+    Returns:
+        Formatted error string with request details
+    """
+    req_info = check_resource_in_api_requests(cluster_data, operation, service)
+
+    if not req_info:
+        return "No API request information available (api_requests.json not found or operation not logged)"
+
+    if req_info['success']:
+        return f"API request succeeded but resource not found in results (operation: {service}.{operation}, timestamp: {req_info['timestamp']})"
+
+    # Request failed - show error details
+    error = req_info.get('error', {})
+    error_code = error.get('code', 'Unknown')
+    error_message = error.get('message', 'No error message')
+    timestamp = req_info.get('timestamp', 'Unknown')
+    duration_ms = req_info.get('duration_ms', 0)
+
+    error_info = {
+        "AWSErrorCode": error_code,
+        "ErrorMessage": error_message,
+        "Timestamp": timestamp,
+        "Duration": f"{duration_ms}ms",
+        "Service": service,
+        "Operation": operation
+    }
+
+    return json.dumps(error_info, indent=2)
 
 
 def get_load_balancers_by_infra_id(cluster_data: ClusterData) -> list:
@@ -93,6 +133,13 @@ def test_load_balancers_exist(cluster_data: ClusterData, request):
             event_types=["Delete", "DeleteLoadBalancer"],
             pytest_request=request
         )
+
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_load_balancers", "elbv2"))
+        print(f"{'─'*80}\n")
 
         pytest.fail(f"No load balancers found for cluster.\n\n{diagnostics}")
 

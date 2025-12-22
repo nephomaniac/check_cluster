@@ -16,6 +16,46 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
 from models.cluster import ClusterData
+from utils.test_helpers import check_resource_in_api_requests
+
+
+def format_api_request_error(cluster_data: ClusterData, operation: str, service: str = "ec2") -> str:
+    """
+    Format API request error information for display.
+
+    Args:
+        cluster_data: ClusterData instance
+        operation: AWS API operation name (e.g., "describe_security_groups")
+        service: AWS service name (e.g., "ec2")
+
+    Returns:
+        Formatted error string with request details
+    """
+    req_info = check_resource_in_api_requests(cluster_data, operation, service)
+
+    if not req_info:
+        return "No API request information available (api_requests.json not found or operation not logged)"
+
+    if req_info['success']:
+        return f"API request succeeded but resource not found in results (operation: {service}.{operation}, timestamp: {req_info['timestamp']})"
+
+    # Request failed - show error details
+    error = req_info.get('error', {})
+    error_code = error.get('code', 'Unknown')
+    error_message = error.get('message', 'No error message')
+    timestamp = req_info.get('timestamp', 'Unknown')
+    duration_ms = req_info.get('duration_ms', 0)
+
+    error_info = {
+        "AWSErrorCode": error_code,
+        "ErrorMessage": error_message,
+        "Timestamp": timestamp,
+        "Duration": f"{duration_ms}ms",
+        "Service": service,
+        "Operation": operation
+    }
+
+    return json.dumps(error_info, indent=2)
 
 
 def get_security_groups(cluster_data: ClusterData) -> List[Dict[str, Any]]:
@@ -212,6 +252,13 @@ def test_security_groups_data_exists(cluster_data: ClusterData):
             api_operation="describe_security_groups",
             resource_identifier=cluster_data.infra_id
         )
+
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_security_groups", "ec2"))
+        print(f"{'─'*80}\n")
 
         pytest.fail(f"No security groups found in data file.\n\n{diagnostics}")
 
