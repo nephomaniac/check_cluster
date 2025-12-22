@@ -9,11 +9,51 @@ import json
 import pytest
 from pathlib import Path
 from models.cluster import ClusterData
+from utils.test_helpers import check_resource_in_api_requests
 
 
 def has_sts_enabled(cluster_data: ClusterData) -> bool:
     """Check if cluster has STS enabled."""
     return cluster_data.cluster_json.get('aws', {}).get('sts', {}).get('enabled', False)
+
+
+def format_api_request_error(cluster_data: ClusterData, operation: str, service: str = "iam") -> str:
+    """
+    Format API request error information for display.
+
+    Args:
+        cluster_data: ClusterData instance
+        operation: AWS API operation name (e.g., "list_open_id_connect_providers")
+        service: AWS service name (e.g., "iam")
+
+    Returns:
+        Formatted error string with request details
+    """
+    req_info = check_resource_in_api_requests(cluster_data, operation, service)
+
+    if not req_info:
+        return "No API request information available (api_requests.json not found or operation not logged)"
+
+    if req_info['success']:
+        return f"API request succeeded but resource not found in results (operation: {service}.{operation}, timestamp: {req_info['timestamp']})"
+
+    # Request failed - show error details
+    error = req_info.get('error', {})
+    error_code = error.get('code', 'Unknown')
+    error_message = error.get('message', 'No error message')
+    timestamp = req_info.get('timestamp', 'Unknown')
+    duration_ms = req_info.get('duration_ms', 0)
+
+    error_info = {
+        "AWSErrorCode": error_code,
+        "ErrorMessage": error_message,
+        "Timestamp": timestamp,
+        "Duration": f"{duration_ms}ms",
+        "Service": service,
+        "Operation": operation
+    }
+
+    return json.dumps(error_info, indent=2)
 
 
 @pytest.fixture
@@ -98,8 +138,16 @@ def test_installer_role_fetched(cluster_data: ClusterData, sts_config):
             "ExpectedFile": role_file.name
         }, indent=2))
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "get_role", "iam"))
+        print(f"{'─'*80}\n")
+
     assert role_file.exists(), \
         f"Installer role file not found: {role_file.name}. " \
+        f"See AWS API request error details above. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
 
 
@@ -137,8 +185,16 @@ def test_support_role_fetched(cluster_data: ClusterData, sts_config):
             "ExpectedFile": role_file.name
         }, indent=2))
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "get_role", "iam"))
+        print(f"{'─'*80}\n")
+
     assert role_file.exists(), \
         f"Support role file not found: {role_file.name}. " \
+        f"See AWS API request error details above. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
 
 
@@ -178,8 +234,16 @@ def test_master_instance_role_fetched(cluster_data: ClusterData, sts_config):
             "ExpectedFile": role_file.name
         }, indent=2))
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "get_role", "iam"))
+        print(f"{'─'*80}\n")
+
     assert role_file.exists(), \
         f"Master instance role file not found: {role_file.name}. " \
+        f"See AWS API request error details above. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
 
 
@@ -219,8 +283,16 @@ def test_worker_instance_role_fetched(cluster_data: ClusterData, sts_config):
             "ExpectedFile": role_file.name
         }, indent=2))
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "get_role", "iam"))
+        print(f"{'─'*80}\n")
+
     assert role_file.exists(), \
         f"Worker instance role file not found: {role_file.name}. " \
+        f"See AWS API request error details above. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
 
 
@@ -372,8 +444,16 @@ def test_oidc_provider_fetched(cluster_data: ClusterData, sts_config):
             "ExpectedListFile": oidc_list_file.name
         }, indent=2))
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "list_open_id_connect_providers", "iam"))
+        print(f"{'─'*80}\n")
+
     assert oidc_list_file.exists(), \
         f"OIDC providers list file not found: {oidc_list_file.name}. " \
+        f"See AWS API request error details above. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
 
     assert oidc_files, \
@@ -464,6 +544,14 @@ def test_audit_log_role_fetched_if_configured(cluster_data: ClusterData, aws_con
             "ExpectedFile": role_file.name
         }, indent=2))
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "get_role", "iam"))
+        print(f"{'─'*80}\n")
+
     assert role_file.exists(), \
         f"Audit log role file not found: {role_file.name}. " \
+        f"See AWS API request error details above. " \
         f"Run get_install_artifacts.py to fetch IAM resources."
