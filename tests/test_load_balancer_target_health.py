@@ -773,7 +773,7 @@ def test_all_targets_registered(cluster_data: ClusterData):
 
     # Get all master instances from cluster data
     master_instances = []
-    for instance in cluster_data.instances:
+    for instance in cluster_data.ec2_instances:
         # Check if instance is a master by looking at tags or name
         tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
         name = tags.get('Name', '')
