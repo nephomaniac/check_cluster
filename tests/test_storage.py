@@ -99,6 +99,13 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str, request):
                 f"{diagnostics}\n\n{ct_result['formatted_message']}"
             )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_volumes", "ec2"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"No EBS volumes data found.\n\n{diagnostics}")
 
     with open(volumes_file) as f:

@@ -94,6 +94,13 @@ def test_vpc_exists(cluster_data: ClusterData, request):
                 pytest_request=request
             )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_vpcs", "ec2"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"No VPC data found.\n\n{diagnostics}")
 
     print(f"\n✓ Found {len(vpc_data)} VPC(s):")

@@ -104,6 +104,13 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str, request):
                 f"{diagnostics}\n\n{ct_result['formatted_message']}"
             )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_subnets", "ec2"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"No subnets data found.\n\n{diagnostics}")
 
     with open(subnets_file) as f:
@@ -135,6 +142,13 @@ def test_subnets_exist(cluster_data: ClusterData, infra_id: str, request):
             event_types=["Delete", "DeleteSubnet"],
             pytest_request=request
         )
+
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_subnets", "ec2"))
+        print(f"{'─'*80}\n")
 
         pytest.fail(f"No subnets found for cluster {infra_id}.\n\n{diagnostics}")
 

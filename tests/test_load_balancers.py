@@ -203,6 +203,13 @@ def test_api_load_balancer_exists(cluster_data: ClusterData, request):
             pytest_request=request
         )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_load_balancers", "elbv2"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"API load balancer not found.\n\n{diagnostics}")
 
     assert api_lb is not None, "API load balancer not found"

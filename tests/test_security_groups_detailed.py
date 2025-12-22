@@ -232,6 +232,13 @@ def test_security_groups_data_exists(cluster_data: ClusterData):
             resource_identifier=cluster_data.infra_id
         )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_security_groups", "ec2"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"No security groups data found.\n\n{diagnostics}")
 
     with open(sg_file) as f:

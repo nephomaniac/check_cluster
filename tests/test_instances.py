@@ -201,6 +201,13 @@ def test_instances_exist(cluster_data: ClusterData):
             resource_identifier=infra_id
         )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "describe_instances", "ec2"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"No EC2 instances found.\n\n{diagnostics}")
 
     print(f"\n✓ Found {len(instances)} EC2 instances:")

@@ -94,6 +94,13 @@ def test_hosted_zone_exists(cluster_data: ClusterData, request):
             pytest_request=request
         )
 
+        # Show AWS API request error details
+        print(f"\n{'─'*80}")
+        print("AWS API REQUEST INFORMATION")
+        print(f"{'─'*80}")
+        print(format_api_request_error(cluster_data, "list_hosted_zones", "route53"))
+        print(f"{'─'*80}\n")
+
         pytest.fail(f"No Route53 hosted zone data found.\n\n{diagnostics}")
 
     hosted_zones = zones.get('HostedZones', [])
