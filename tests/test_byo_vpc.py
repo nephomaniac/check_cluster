@@ -44,6 +44,8 @@ def test_byo_vpc_subnets_configuration_exists(cluster_data: ClusterData, byo_sub
 
     Failure indicates: This is not a BYO VPC cluster, or subnet configuration
     is missing from cluster metadata.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster (no aws.subnet_ids in cluster.json)")
@@ -63,6 +65,8 @@ def test_byo_vpc_all_subnets_fetched(cluster_data: ClusterData, byo_subnet_ids):
     Failure indicates: One or more subnets specified in cluster.json could not
     be found in AWS. This could mean the subnet was deleted, the cluster is in
     a different AWS account, or permissions are insufficient.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")
@@ -76,7 +80,7 @@ def test_byo_vpc_all_subnets_fetched(cluster_data: ClusterData, byo_subnet_ids):
 
     assert not missing_subnets, \
         f"Subnet files not found for: {', '.join(missing_subnets)}. " \
-        f"Run get_install_artifacts.py to fetch missing subnets."
+        f"Run check_cluster.py <cluster-id> --collect --resources=vpc to fetch missing subnets."
 
 
 @pytest.mark.network
@@ -88,6 +92,8 @@ def test_byo_vpc_subnets_in_same_vpc(cluster_data: ClusterData, byo_subnet_ids, 
 
     Failure indicates: Subnets are spread across multiple VPCs, which is an
     invalid configuration. Verify the subnet IDs in cluster.json are correct.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")
@@ -121,6 +127,8 @@ def test_byo_vpc_subnets_have_cluster_tags(cluster_data: ClusterData, byo_subnet
     Failure indicates: Subnets are missing required cluster tags. This may cause
     issues with cluster networking, load balancer provisioning, or resource cleanup.
     Check subnet tags in AWS console or via AWS CLI.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")
@@ -225,6 +233,8 @@ def test_byo_vpc_has_correct_tags(cluster_data: ClusterData, byo_subnet_ids, byo
 
     Failure indicates: VPC is missing required cluster tags. This may cause issues
     with cluster networking or resource management.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")
@@ -273,6 +283,8 @@ def test_byo_vpc_subnets_available(cluster_data: ClusterData, byo_subnet_ids, by
 
     Failure indicates: One or more subnets are not available. This could indicate
     infrastructure issues or pending changes in AWS.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     if not byo_subnet_ids:
         pytest.skip("Not a BYO VPC cluster")

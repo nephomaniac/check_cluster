@@ -8,6 +8,12 @@ EC2 console logs, and cluster state markers. Based on:
 - AWS EC2 console output analysis
 - OCM cluster status tracking
 
+Documentation:
+- OpenShift Installation Process: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
+- ROSA Installation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
+- Ignition Specification: https://coreos.github.io/ignition/
+- Installation Troubleshooting: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
+
 Installation Phases:
 1. Ignition Configuration (bootstrap.ign, master.ign, worker.ign)
 2. Bootstrap Node Initialization
@@ -335,6 +341,8 @@ def test_installation_phase_detection(cluster_data: ClusterData):
     References:
     - https://docs.redhat.com/en/documentation/openshift_container_platform/4.13/html/installation_overview/ocp-installation-overview
     - https://deepwiki.com/openshift/appliance/5.1-bootstrap-process
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     phase_info = detect_installation_phase(cluster_data)
 
@@ -384,6 +392,8 @@ def test_cluster_installation_state(cluster_data: ClusterData):
 
     References:
     - https://docs.redhat.com/en/documentation/openshift_container_platform/4.13/html/installation_overview/ocp-installation-overview
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     state = cluster_data.cluster_state
 
@@ -453,6 +463,8 @@ def test_control_plane_bootstrap_status(cluster_data: ClusterData):
     References:
     - https://deepwiki.com/openshift/appliance/5.1-bootstrap-process
     - https://github.com/openshift/installer/blob/main/docs/user/troubleshootingbootstrap.md
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     state = cluster_data.cluster_state.lower()
 
@@ -535,6 +547,8 @@ def test_console_log_analysis_master(cluster_data: ClusterData):
     References:
     - https://docs.okd.io/latest/support/troubleshooting/troubleshooting-installations.html
     - https://www.redhat.com/en/blog/openshift-4.x-installation-quick-overview
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     # Look for console log files for master nodes
     master_console_logs = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*master*console*.txt"))
@@ -619,6 +633,8 @@ def test_ignition_configuration_accessible(cluster_data: ClusterData):
     References:
     - https://www.redhat.com/en/blog/openshift-4.x-installation-quick-overview
     - https://rdalal3.medium.com/openshift-installation-process-a750d490f21b
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     # Check OCM resources for ignition-related configuration
     resources = cluster_data.resources
@@ -663,6 +679,8 @@ def test_cluster_operators_deployment_status(cluster_data: ClusterData):
 
     References:
     - https://docs.redhat.com/en/documentation/openshift_container_platform/4.13/html/installation_overview/ocp-installation-overview
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     state = cluster_data.cluster_state.lower()
 
@@ -701,6 +719,8 @@ def test_bootstrap_completion_indicators(cluster_data: ClusterData):
     References:
     - https://deepwiki.com/openshift/appliance/5.1-bootstrap-process
     - https://github.com/openshift/installer/blob/main/docs/user/troubleshootingbootstrap.md
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     state = cluster_data.cluster_state.lower()
 
@@ -764,6 +784,8 @@ def test_etcd_quorum_formation(cluster_data: ClusterData):
     References:
     - https://deepwiki.com/openshift/cluster-etcd-operator/4.1-bootstrap-process
     - https://docs.redhat.com/en/documentation/openshift_container_platform/4.10/html/installing/index.html
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     """
     masters = _get_master_instances(cluster_data)
 

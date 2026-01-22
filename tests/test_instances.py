@@ -2,6 +2,11 @@
 EC2 Instance Tests
 
 Validates EC2 instances for ROSA cluster nodes (control plane and workers).
+
+Documentation:
+- ROSA Instance Types: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/architecture/rosa-understanding#rosa-sdpolicy-platform
+- AWS EC2 Instances: https://docs.aws.amazon.com/ec2/index.html
+- ROSA Node Configuration: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-with-customizations
 """
 
 import json
@@ -183,6 +188,8 @@ def test_instances_exist(cluster_data: ClusterData):
     installation, catastrophic infrastructure failure, or incorrect data collection.
 
     Success indicates: EC2 instances exist and were successfully collected.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     instances = cluster_data.ec2_instances
     infra_id = cluster_data.infra_id
@@ -280,6 +287,8 @@ def test_control_plane_instances_running(cluster_data: ClusterData, request):
 
     Failure indicates: Control plane instances are stopped, stopping, or terminated. This could indicate
     infrastructure issues, manual intervention, or cluster degradation requiring immediate attention.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     masters = get_instances_by_role(cluster_data, 'master')
 
@@ -289,9 +298,9 @@ def test_control_plane_instances_running(cluster_data: ClusterData, request):
         print("\nTo collect EC2 instance data, run:")
         print("  aws ec2 describe-instances --output json > <cluster-id>_ec2_instances.json")
         print("\nOr use the data collection script:")
-        print("  ./get_install_artifacts.sh -c <cluster-id>")
+        print("  ./check_cluster.py <cluster-id> --collect")
         print("  # OR")
-        print("  ./get_install_artifacts.py -c <cluster-id>")
+        print("  ./check_cluster.py <cluster-id> --collect")
         pytest.skip("No EC2 instances data file found - run data collection script")
 
     if not masters:
@@ -466,6 +475,8 @@ def test_worker_instances_running(cluster_data: ClusterData, request):
 
     Failure indicates: Worker instances are stopped, stopping, or terminated. This could indicate
     auto-scaling issues, infrastructure failures, or capacity problems affecting workload availability.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     workers = get_instances_by_role(cluster_data, 'worker')
 
@@ -475,9 +486,9 @@ def test_worker_instances_running(cluster_data: ClusterData, request):
         print("\nTo collect EC2 instance data, run:")
         print("  aws ec2 describe-instances --output json > <cluster-id>_ec2_instances.json")
         print("\nOr use the data collection script:")
-        print("  ./get_install_artifacts.sh -c <cluster-id>")
+        print("  ./check_cluster.py <cluster-id> --collect")
         print("  # OR")
-        print("  ./get_install_artifacts.py -c <cluster-id>")
+        print("  ./check_cluster.py <cluster-id> --collect")
         pytest.skip("No EC2 instances data file found - run data collection script")
 
     if not workers:
@@ -652,6 +663,8 @@ def test_instances_have_private_ips(cluster_data: ClusterData):
 
     Failure indicates: Instances were terminated or networking failed to initialize. This prevents
     the instance from joining the cluster and requires investigation of EC2 networking configuration.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     instances_without_ip = []
 
@@ -668,7 +681,9 @@ def test_instances_have_private_ips(cluster_data: ClusterData):
 
 @pytest.mark.instances
 def test_instances_in_vpc(cluster_data: ClusterData, vpc_cidr: str):
-    """All instances must be in the cluster VPC"""
+    """All instances must be in the cluster VPC
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
+    """
     instances_outside_vpc = []
 
     for instance in cluster_data.ec2_instances:
@@ -696,6 +711,8 @@ def test_instances_have_security_groups(cluster_data: ClusterData):
 
     Failure indicates: Instance networking is misconfigured. This could prevent cluster communication
     or indicate incomplete instance initialization requiring investigation.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     instances_without_sgs = []
 
@@ -719,6 +736,8 @@ def test_control_plane_instance_count(cluster_data: ClusterData):
 
     Failure indicates: The cluster has fewer or more than 3 control plane instances, indicating
     either incomplete deployment, instance failure, or non-standard configuration that may affect availability.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     masters = get_instances_by_role(cluster_data, 'master')
     infra_id = cluster_data.infra_id
@@ -788,6 +807,8 @@ def test_instances_have_cluster_tags(cluster_data: ClusterData):
 
     Failure indicates: Instances are missing required cluster identification tags. This could prevent
     cloud provider integrations from working correctly and may indicate incomplete instance provisioning.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     infra_id = cluster_data.infra_id
     instances_without_tags = []
@@ -819,6 +840,8 @@ def test_infra_instances_running(cluster_data: ClusterData, request):
 
     Failure indicates: Infra instances are stopped, stopping, or terminated. This could indicate
     infrastructure failures, auto-scaling issues, or capacity problems affecting cluster services.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     infras = get_instances_by_role(cluster_data, 'infra')
 
@@ -828,9 +851,9 @@ def test_infra_instances_running(cluster_data: ClusterData, request):
         print("\nTo collect EC2 instance data, run:")
         print("  aws ec2 describe-instances --output json > <cluster-id>_ec2_instances.json")
         print("\nOr use the data collection script:")
-        print("  ./get_install_artifacts.sh -c <cluster-id>")
+        print("  ./check_cluster.py <cluster-id> --collect")
         print("  # OR")
-        print("  ./get_install_artifacts.py -c <cluster-id>")
+        print("  ./check_cluster.py <cluster-id> --collect")
         pytest.skip("No EC2 instances data file found - run data collection script")
 
     if not infras:
@@ -997,6 +1020,8 @@ def test_infra_instance_count(cluster_data: ClusterData):
 
     Failure indicates: Missing infra nodes (capacity issue), excess infra nodes (investigate why),
     or non-running infra nodes requiring immediate attention.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
     """
     infras = get_instances_by_role(cluster_data, 'infra')
     infra_id = cluster_data.infra_id
@@ -1168,7 +1193,9 @@ def test_infra_instance_count(cluster_data: ClusterData):
 
 @pytest.mark.instances
 def test_instances_have_iam_profile(cluster_data: ClusterData):
-    """Instances should have IAM instance profiles for AWS API access"""
+    """Instances should have IAM instance profiles for AWS API access
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-ec2-instances
+    """
     instances_without_profile = []
 
     for instance in cluster_data.ec2_instances:

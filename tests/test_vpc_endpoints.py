@@ -3,6 +3,10 @@ VPC Endpoints Tests
 
 Validates VPC endpoint configuration for service connectivity.
 Tests interface and gateway endpoints for AWS services.
+
+Documentation:
+- VPC Endpoints for PrivateLink: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+- AWS VPC Endpoints Overview: https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints.html
 """
 
 import pytest
@@ -13,7 +17,9 @@ from models.cluster import ClusterData
 
 @pytest.mark.network
 def test_vpc_endpoints_exist(cluster_data: ClusterData, infra_id: str):
-    """Cluster may have VPC endpoints for AWS services"""
+    """Cluster may have VPC endpoints for AWS services
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+    """
     endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
@@ -34,7 +40,9 @@ def test_vpc_endpoints_exist(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.network
 def test_vpc_endpoints_available_state(cluster_data: ClusterData, infra_id: str):
-    """VPC endpoints should be in 'available' state"""
+    """VPC endpoints should be in 'available' state
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+    """
     endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
@@ -62,7 +70,9 @@ def test_vpc_endpoints_available_state(cluster_data: ClusterData, infra_id: str)
 
 @pytest.mark.network
 def test_vpc_endpoints_have_service_name(cluster_data: ClusterData, infra_id: str):
-    """VPC endpoints should have service name configured"""
+    """VPC endpoints should have service name configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+    """
     endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
@@ -90,7 +100,9 @@ def test_vpc_endpoints_have_service_name(cluster_data: ClusterData, infra_id: st
 
 @pytest.mark.network
 def test_interface_endpoints_have_security_groups(cluster_data: ClusterData, infra_id: str):
-    """Interface VPC endpoints should have security groups attached"""
+    """Interface VPC endpoints should have security groups attached
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+    """
     endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
@@ -127,7 +139,9 @@ def test_interface_endpoints_have_security_groups(cluster_data: ClusterData, inf
 
 @pytest.mark.network
 def test_interface_endpoints_have_subnets(cluster_data: ClusterData, infra_id: str):
-    """Interface VPC endpoints should be deployed in subnets"""
+    """Interface VPC endpoints should be deployed in subnets
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+    """
     endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():
@@ -164,7 +178,9 @@ def test_interface_endpoints_have_subnets(cluster_data: ClusterData, infra_id: s
 
 @pytest.mark.network
 def test_s3_gateway_endpoint_exists(cluster_data: ClusterData, infra_id: str):
-    """Check if S3 gateway endpoint exists (common for private clusters)"""
+    """Check if S3 gateway endpoint exists (common for private clusters)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-privatelink-aws-vpc-requirements
+    """
     endpoints_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_vpc_endpoints.json"
 
     if not endpoints_file.exists():

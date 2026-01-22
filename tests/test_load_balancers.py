@@ -3,6 +3,11 @@ Load Balancer Tests
 
 Validates load balancer configuration for ROSA cluster API and ingress.
 Includes target groups and target health validation.
+
+Documentation:
+- ROSA Load Balancers: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+- AWS ELB: https://docs.aws.amazon.com/elasticloadbalancing/
+- ROSA Ingress: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/configuring-ingress
 """
 
 import pytest
@@ -100,6 +105,8 @@ def test_load_balancers_exist(cluster_data: ClusterData, request):
     Failure indicates: Load balancers are missing, not created, or were deleted.
 
     Success indicates: Load balancers exist and were successfully collected.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
     """
     lbs = get_load_balancers_by_infra_id(cluster_data)
 
@@ -159,6 +166,8 @@ def test_api_load_balancer_exists(cluster_data: ClusterData, request):
     Failure indicates: API load balancer was not created or was deleted.
 
     Success indicates: API load balancer exists and is accessible.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
     """
     api_lb = get_api_load_balancer(cluster_data)
 
@@ -217,7 +226,9 @@ def test_api_load_balancer_exists(cluster_data: ClusterData, request):
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_healthy(cluster_data: ClusterData):
-    """API load balancer must be in active state"""
+    """API load balancer must be in active state
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if not api_lb:
@@ -238,7 +249,9 @@ def test_api_load_balancer_healthy(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_scheme(cluster_data: ClusterData, is_private_cluster: bool):
-    """API load balancer scheme must match cluster type (public/private)"""
+    """API load balancer scheme must match cluster type (public/private)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if not api_lb:
@@ -263,7 +276,9 @@ def test_api_load_balancer_scheme(cluster_data: ClusterData, is_private_cluster:
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_has_listeners(cluster_data: ClusterData):
-    """API load balancer must have listeners configured (Classic LB only)"""
+    """API load balancer must have listeners configured (Classic LB only)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if not api_lb:
@@ -283,7 +298,9 @@ def test_api_load_balancer_has_listeners(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_port_6443(cluster_data: ClusterData):
-    """API load balancer must listen on port 6443 (Classic LB only)"""
+    """API load balancer must listen on port 6443 (Classic LB only)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if not api_lb:
@@ -310,7 +327,9 @@ def test_api_load_balancer_port_6443(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_port_22623(cluster_data: ClusterData):
-    """API load balancer must listen on port 22623 (MCS - Classic LB only)"""
+    """API load balancer must listen on port 22623 (MCS - Classic LB only)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if not api_lb:
@@ -337,7 +356,9 @@ def test_api_load_balancer_port_22623(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_load_balancers_have_security_groups(cluster_data: ClusterData):
-    """Load balancers must have security groups attached"""
+    """Load balancers must have security groups attached
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     lbs = get_load_balancers_by_infra_id(cluster_data)
 
     lbs_without_sgs = []
@@ -360,7 +381,9 @@ def test_load_balancers_have_security_groups(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_load_balancers_in_multiple_azs(cluster_data: ClusterData):
-    """Load balancers should be in multiple availability zones for HA (multi-AZ clusters only)"""
+    """Load balancers should be in multiple availability zones for HA (multi-AZ clusters only)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     lbs = get_load_balancers_by_infra_id(cluster_data)
 
     # Check if this is a multi-AZ cluster
@@ -390,7 +413,9 @@ def test_load_balancers_in_multiple_azs(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_api_load_balancer_has_dns_name(cluster_data: ClusterData):
-    """API load balancer must have DNS name"""
+    """API load balancer must have DNS name
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     api_lb = get_api_load_balancer(cluster_data)
 
     if not api_lb:
@@ -423,7 +448,9 @@ def test_api_load_balancer_has_dns_name(cluster_data: ClusterData):
 
 @pytest.mark.load_balancers
 def test_target_groups_exist(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have target groups for load balancers"""
+    """Cluster should have target groups for load balancers
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
@@ -465,7 +492,9 @@ def test_target_groups_exist(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.load_balancers
 def test_api_target_group_exists(cluster_data: ClusterData, infra_id: str):
-    """API load balancer should have target group on port 6443"""
+    """API load balancer should have target group on port 6443
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
@@ -500,7 +529,9 @@ def test_api_target_group_exists(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.load_balancers
 def test_mcs_target_group_exists(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have target group for Machine Config Server (port 22623)"""
+    """Cluster should have target group for Machine Config Server (port 22623)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
@@ -533,7 +564,9 @@ def test_mcs_target_group_exists(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.load_balancers
 def test_target_groups_have_health_checks(cluster_data: ClusterData, infra_id: str):
-    """All target groups should have health checks enabled"""
+    """All target groups should have health checks enabled
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
@@ -578,7 +611,9 @@ def test_target_groups_have_health_checks(cluster_data: ClusterData, infra_id: s
 
 @pytest.mark.load_balancers
 def test_api_target_group_health_check_path(cluster_data: ClusterData, infra_id: str):
-    """API target group should use /readyz health check path"""
+    """API target group should use /readyz health check path
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
@@ -617,7 +652,9 @@ def test_api_target_group_health_check_path(cluster_data: ClusterData, infra_id:
 
 @pytest.mark.load_balancers
 def test_mcs_target_group_health_check_path(cluster_data: ClusterData, infra_id: str):
-    """MCS target group should use /healthz health check path"""
+    """MCS target group should use /healthz health check path
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     tg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_target_groups.json"
 
     if not tg_file.exists():
@@ -654,7 +691,9 @@ def test_mcs_target_group_health_check_path(cluster_data: ClusterData, infra_id:
 
 @pytest.mark.load_balancers
 def test_target_health_no_unhealthy_targets(cluster_data: ClusterData, infra_id: str):
-    """Target groups should not have unhealthy targets (best effort check)"""
+    """Target groups should not have unhealthy targets (best effort check)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     # Look for target health files
     target_health_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_target_health.json"))
 
@@ -706,7 +745,9 @@ def test_target_health_no_unhealthy_targets(cluster_data: ClusterData, infra_id:
 
 @pytest.mark.load_balancers
 def test_target_groups_have_targets_registered(cluster_data: ClusterData, infra_id: str):
-    """Target groups should have targets registered"""
+    """Target groups should have targets registered
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     # Look for target health files
     target_health_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_target_health.json"))
 
@@ -751,7 +792,9 @@ def test_target_groups_have_targets_registered(cluster_data: ClusterData, infra_
 
 @pytest.mark.load_balancers
 def test_nlb_listeners_exist(cluster_data: ClusterData, infra_id: str):
-    """Network Load Balancers should have listeners configured"""
+    """Network Load Balancers should have listeners configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     # Look for listener files
     listener_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_listeners.json"))
 
@@ -793,7 +836,9 @@ def test_nlb_listeners_exist(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.load_balancers
 def test_api_nlb_listener_port_6443(cluster_data: ClusterData, infra_id: str):
-    """API NLB should have listener on port 6443"""
+    """API NLB should have listener on port 6443
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     # Look for API load balancer listener file
     api_lb_pattern = f"{cluster_data.cluster_id}_*ext*_listeners.json"
     listener_files = list(cluster_data.aws_dir.glob(api_lb_pattern))
@@ -827,7 +872,9 @@ def test_api_nlb_listener_port_6443(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.load_balancers
 def test_api_nlb_listener_port_22623(cluster_data: ClusterData, infra_id: str):
-    """API NLB should have listener on port 22623 (MCS)"""
+    """API NLB should have listener on port 22623 (MCS)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     # Look for internal load balancer listener file (has MCS)
     int_lb_pattern = f"{cluster_data.cluster_id}_*int*_listeners.json"
     listener_files = list(cluster_data.aws_dir.glob(int_lb_pattern))
@@ -869,7 +916,9 @@ def test_api_nlb_listener_port_22623(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.load_balancers
 def test_nlb_listeners_have_default_actions(cluster_data: ClusterData, infra_id: str):
-    """NLB listeners should have default actions configured"""
+    """NLB listeners should have default actions configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/networking/load-balancers
+    """
     listener_files = list(cluster_data.aws_dir.glob(f"{cluster_data.cluster_id}_*_listeners.json"))
 
     if len(listener_files) == 0:

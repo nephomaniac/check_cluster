@@ -7,6 +7,12 @@ Deep diagnostic analysis of OpenShift/ROSA cluster installations using:
 - Embedded OpenShift installation knowledge
 
 Provides detailed failure analysis with automated remediation suggestions.
+
+Documentation:
+- ROSA Installation Process: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
+- Installation Troubleshooting: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
+- Bootstrap Process: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
+- Ignition Configuration: https://coreos.github.io/ignition/
 """
 
 import pytest
@@ -41,6 +47,8 @@ def test_bootstrap_detailed_analysis(cluster_data: ClusterData, request):
     Success indicates: Bootstrap process is progressing normally or has
     completed successfully.
 
+
+    Documentation: https://docs.openshift.com/container-platform/latest/installing/index.html#installation-process
     Severity: INFO - Provides diagnostic information even when tests pass
     """
     # Get master instances for bootstrap analysis
@@ -222,6 +230,8 @@ def test_api_server_initialization_diagnostics(cluster_data: ClusterData, reques
 
     Success indicates: API server initialized successfully.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
     Severity: INFO - Diagnostic information
     """
     # TODO: Implement API server diagnostics parser
@@ -247,6 +257,8 @@ def test_machine_health_check_diagnostics(cluster_data: ClusterData, request):
 
     Success indicates: All machines are healthy and ready.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
     Severity: CRITICAL - Unhealthy machines prevent cluster operation
     """
     # TODO: Implement machine health check diagnostics
@@ -276,6 +288,8 @@ def test_ignition_detailed_diagnostics(cluster_data: ClusterData, request):
 
     Success indicates: Ignition configuration was fetched and applied successfully.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
     Severity: CRITICAL - Ignition failures prevent instance initialization
     """
     # TODO: Implement Ignition diagnostics parser
@@ -294,6 +308,8 @@ def test_console_logs_available(cluster_data: ClusterData):
     This is expected for older cluster data or if collection was interrupted.
 
     Success indicates: Console logs are available for analysis.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
     """
     # Check if hosts directory exists
     hosts_dir = cluster_data.hosts_dir

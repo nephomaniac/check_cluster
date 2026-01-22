@@ -128,6 +128,8 @@ def test_installer_role_has_policy(cluster_data: ClusterData):
 
     Remediation: Attach ROSAInstallerPolicy or equivalent custom policy to installer role.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Missing policy prevents cluster installation
     """
     installer_roles = get_iam_role_files(cluster_data, 'installer')
@@ -222,6 +224,8 @@ def test_worker_role_has_policy(cluster_data: ClusterData):
 
     Remediation: Attach ROSAWorkerInstancePolicy or equivalent custom policy to worker role.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Missing policy prevents worker nodes from functioning properly
     """
     worker_roles = get_iam_role_files(cluster_data, 'worker')
@@ -259,6 +263,8 @@ def test_control_plane_role_exists(cluster_data: ClusterData):
 
     Success indicates: Control plane role exists.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Control plane role is required for master nodes
     """
     master_roles = get_iam_role_files(cluster_data, 'master')
@@ -290,6 +296,8 @@ def test_support_role_exists(cluster_data: ClusterData):
 
     Success indicates: Support role exists with ROSASRESupportPolicy.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: MEDIUM - Support role is recommended for Red Hat SRE access
     """
     support_roles = get_iam_role_files(cluster_data, 'support')
@@ -326,6 +334,8 @@ def test_operator_roles_exist(cluster_data: ClusterData):
 
     Success indicates: Operator roles exist for cluster operators.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Operator roles are required for operator functionality
     """
     from utils.iam_diagnostics import diagnose_missing_iam_data
@@ -420,6 +430,8 @@ def test_ebs_csi_driver_operator_role_exists(cluster_data: ClusterData):
 
     Success indicates: EBS CSI driver operator role exists.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Required for persistent volume provisioning
     """
     operator_pattern = "*_iam_role_operator-openshift-cluster-csi-drivers-ebs*.json"
@@ -462,6 +474,8 @@ def test_oidc_provider_exists(cluster_data: ClusterData):
 
     Success indicates: OIDC provider is configured for the cluster.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: MEDIUM - OIDC provider is required for some authentication scenarios
     """
     # Find OIDC provider files
@@ -498,6 +512,8 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData):
 
     Success indicates: Policy files exist for IAM roles.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Policy data is essential for permission validation
     """
     from utils.iam_diagnostics import diagnose_missing_iam_data
@@ -607,7 +623,7 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData):
                 error_msg += "\n🔧 Remediation:\n"
                 error_msg += "  1. Update data collection script to include policy collection\n"
                 error_msg += "  2. Ensure script calls ListAttachedRolePolicies for each role\n"
-                error_msg += "  3. Re-run: python get_install_artifacts.py -c <cluster-id> --include-policies\n"
+                error_msg += "  3. Re-run: check_cluster.py <cluster-id> --collect --resources=iam\n"
 
             else:
                 failed_policy_requests = [req for req in policy_requests if not req.get('success', True)]
@@ -674,7 +690,7 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData):
             error_msg += "  • Cannot determine if policy collection was attempted\n"
             error_msg += "\n🔧 Remediation:\n"
             error_msg += "  1. Use data collection script with API logging enabled\n"
-            error_msg += "  2. Re-run: python get_install_artifacts.py -c <cluster-id>\n"
+            error_msg += "  2. Re-run: check_cluster.py <cluster-id> --collect\n"
 
         pytest.fail(error_msg)
 
@@ -691,6 +707,8 @@ def test_iam_roles_summary(cluster_data: ClusterData):
 
     Why: Provides overview of cluster IAM configuration.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: INFO - Informational test only
     """
     # Find all IAM role files
@@ -773,6 +791,8 @@ def test_roles_have_rosa_tags(cluster_data: ClusterData):
 
     Success indicates: Roles are properly tagged for ROSA management.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Tags are important for resource management
     """
     all_role_files = [

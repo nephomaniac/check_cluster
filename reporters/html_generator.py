@@ -90,10 +90,33 @@ class HTMLReportGenerator:
         outcome_map = {
             'passed': 'status-pass',
             'failed': 'status-fail',
+            'failed-accessdenied': 'status-access-denied',
             'skipped': 'status-skip',
             'error': 'status-error'
         }
         return outcome_map.get(outcome, 'status-unknown')
+
+    def _is_access_denied_failure(self, test: Dict[str, Any]) -> bool:
+        """
+        Check if test failed due to ManagedOpenShift-Support-Role AccessDenied error.
+
+        Returns:
+            True if test failed due to AccessDenied, False otherwise
+        """
+        outcome = test.get('outcome', '')
+        if outcome != 'failed':
+            return False
+
+        call_info = test.get('call', {})
+        longrepr = call_info.get('longrepr', '')
+        stdout = call_info.get('stdout', '')
+
+        # Check for AccessDenied in longrepr or stdout
+        combined_output = f"{longrepr}\n{stdout}".lower()
+
+        return ('accessdenied' in combined_output or
+                'access denied' in combined_output) and \
+               'managedopenshift-support-role' in combined_output
 
     def _format_test_duration(self, duration: float) -> str:
         """Format test duration in human-readable format"""
@@ -132,12 +155,17 @@ class HTMLReportGenerator:
         """Generate complete HTML content"""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+        # Generate metrics HTML
+        metrics_html = self._generate_metrics_html()
+
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ROSA Cluster Health Check Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     {self._generate_css()}
 </head>
 <body>
@@ -186,10 +214,24 @@ class HTMLReportGenerator:
             </div>
         </section>
 
-        <section class="categories">
-            <h2>Test Results by Category</h2>
-            {self._generate_categories_html(categories)}
-        </section>
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-button active" onclick="switchTab('tests')">Test Results</button>
+            <button class="tab-button" onclick="switchTab('metrics')">CloudWatch Metrics</button>
+        </div>
+
+        <!-- Test Results Tab -->
+        <div id="tests-tab" class="tab-content active">
+            <section class="categories">
+                <h2>Test Results by Category</h2>
+                {self._generate_categories_html(categories)}
+            </section>
+        </div>
+
+        <!-- Metrics Tab -->
+        <div id="metrics-tab" class="tab-content">
+            {metrics_html}
+        </div>
     </div>
     {self._generate_javascript()}
 </body>
@@ -257,6 +299,10 @@ class HTMLReportGenerator:
         call_info = test.get('call', {})
         stdout = call_info.get('stdout', '')
 
+        # Check for AccessDenied failures first (takes precedence)
+        if self._is_access_denied_failure(test):
+            return 'ManagedOpenShift-Support-Role AccessDenied could not fetch AWS resources needed to perform test validation'
+
         if outcome == 'passed':
             # Look for ✓ success message
             if stdout:
@@ -265,6 +311,9 @@ class HTMLReportGenerator:
                 if success_lines:
                     return success_lines[0]
             return 'All validations passed'
+
+        elif outcome == 'failed-accessdenied':
+            return 'ManagedOpenShift-Support-Role AccessDenied could not fetch AWS resources needed to perform test validation'
 
         elif outcome == 'failed':
             # Look for ✗ failure message in stdout
@@ -600,17 +649,25 @@ class HTMLReportGenerator:
             lineno = test.get('lineno', 'N/A')
 
             outcome = test.get('outcome', 'unknown')
+
+            # Check if this is an AccessDenied failure and update outcome
+            if self._is_access_denied_failure(test):
+                outcome = 'failed-accessdenied'
+
             duration = test.get('duration', 0)
             status_class = self._get_status_class(outcome)
 
-            # Get docstring from user_properties (stored by pytest hook)
+            # Get docstring and module docstring from user_properties (stored by pytest hook)
             test_doc = None
+            module_doc = None
             user_properties = test.get('user_properties', [])
             if user_properties and isinstance(user_properties, list):
                 for prop in user_properties:
-                    if isinstance(prop, dict) and 'test_doc' in prop:
-                        test_doc = prop['test_doc']
-                        break
+                    if isinstance(prop, dict):
+                        if 'test_doc' in prop:
+                            test_doc = prop['test_doc']
+                        if 'module_doc' in prop:
+                            module_doc = prop['module_doc']
 
             # Fallback to generated title if no docstring found
             if not test_doc:
@@ -618,6 +675,11 @@ class HTMLReportGenerator:
 
             # Parse docstring for description parts
             description_html = self._parse_test_description(test_doc)
+
+            # Parse module docstring for file-level documentation (if available)
+            module_doc_html = ''
+            if module_doc:
+                module_doc_html = self._parse_module_documentation(module_doc)
 
             # Extract status reason and JSON output
             status_reason = self._extract_status_reason(test)
@@ -758,6 +820,7 @@ class HTMLReportGenerator:
                                         <h4>Test Description</h4>
                                         {description_html}
                                     </div>
+                                    {module_doc_html}
                                     {sources_html}
                                 </div>
                             </td>
@@ -1557,13 +1620,325 @@ class HTMLReportGenerator:
             '''
 
         if documentation_text:
-            # Make URLs clickable
-            if documentation_text.startswith('http'):
-                html += f'<div class="test-section test-docs"><strong>Documentation:</strong> <a href="{documentation_text}" target="_blank">{documentation_text}</a></div>'
-            else:
-                html += f'<div class="test-section test-docs"><strong>Documentation:</strong> {documentation_text}</div>'
+            # Make URLs clickable - handle multiple links in bullet lists
+            import re
+
+            # Replace URLs with clickable links
+            def make_link_clickable(match):
+                url = match.group(0)
+                return f'<a href="{url}" target="_blank">{url}</a>'
+
+            # Find all URLs and make them clickable
+            doc_html = re.sub(r'https?://[^\s<>"]+', make_link_clickable, documentation_text)
+
+            # Convert newlines to <br> for proper line breaks
+            doc_html = doc_html.replace('\n', '<br>')
+
+            html += f'<div class="test-section test-docs"><strong>Documentation:</strong><br>{doc_html}</div>'
 
         return html
+
+    def _parse_module_documentation(self, module_doc: str) -> str:
+        """Parse module docstring and extract Documentation section for display"""
+        if not module_doc:
+            return ''
+
+        import re
+
+        # Look for Documentation: section in module docstring
+        lines = module_doc.split('\n')
+        documentation_lines = []
+        in_documentation = False
+
+        for line in lines:
+            line_stripped = line.strip()
+            if line_stripped.startswith('Documentation:'):
+                in_documentation = True
+                # Get any text after "Documentation:" on same line
+                after_marker = line_stripped[len('Documentation:'):].strip()
+                if after_marker:
+                    documentation_lines.append(after_marker)
+                continue
+
+            if in_documentation:
+                # Stop at empty line or next section
+                if not line_stripped or line_stripped.endswith(':'):
+                    break
+                documentation_lines.append(line_stripped)
+
+        if not documentation_lines:
+            return ''
+
+        # Join documentation lines
+        documentation_text = '\n'.join(documentation_lines)
+
+        # Replace URLs with clickable links
+        def make_link_clickable(match):
+            url = match.group(0)
+            return f'<a href="{url}" target="_blank">{url}</a>'
+
+        doc_html = re.sub(r'https?://[^\s<>"]+', make_link_clickable, documentation_text)
+
+        # Convert newlines to <br> for proper line breaks
+        doc_html = doc_html.replace('\n', '<br>')
+
+        # Wrap in a collapsible section
+        html = f'''
+        <div class="detail-section">
+            <details open style="margin: 10px 0;">
+                <summary style="cursor: pointer; font-weight: bold; color: #2c3e50; padding: 8px; background: #e8f5e9; border-radius: 4px; user-select: none;">
+                    📚 Test File Documentation
+                </summary>
+                <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                    <div class="test-section test-docs">{doc_html}</div>
+                </div>
+            </details>
+        </div>'''
+
+        return html
+
+    def _load_cloudwatch_metrics(self, instance_id: str, metric_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Load CloudWatch metrics from JSON file.
+
+        Args:
+            instance_id: EC2 instance ID
+            metric_name: Metric name (e.g., 'CPUUtilization', 'mem_used_percent')
+
+        Returns:
+            Metrics data dict or None if not found
+        """
+        # Try sources/metrics directory (new structure)
+        metrics_dir = self.cluster_data_dir / "sources" / "metrics"
+
+        if not metrics_dir.exists():
+            # Try legacy flat structure
+            metrics_dir = self.cluster_data_dir
+
+        # Look for matching metrics file
+        pattern = f"*_{instance_id}_{metric_name}_*.json"
+        matching_files = list(metrics_dir.glob(pattern))
+
+        if not matching_files:
+            return None
+
+        # Use the most recent file
+        metrics_file = max(matching_files, key=lambda p: p.stat().st_mtime)
+
+        try:
+            with open(metrics_file) as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: Failed to load metrics from {metrics_file}: {e}", file=sys.stderr)
+            return None
+
+    def _get_cluster_instances(self) -> List[Dict[str, str]]:
+        """
+        Get list of cluster EC2 instances.
+
+        Returns:
+            List of dicts with 'id' and 'name' keys
+        """
+        instances = []
+
+        # Try to load instances from sources/aws directory
+        aws_dir = self.cluster_data_dir / "sources" / "aws"
+        if not aws_dir.exists():
+            aws_dir = self.cluster_data_dir
+
+        # Look for instances JSON file
+        instances_files = list(aws_dir.glob("*_ec2_instances.json"))
+
+        if not instances_files:
+            return instances
+
+        # Load instances from the first matching file
+        instances_file = instances_files[0]
+
+        try:
+            with open(instances_file) as f:
+                data = json.load(f)
+
+            # Handle different data structures
+            if isinstance(data, dict):
+                # AWS API response format with Reservations
+                reservations = data.get('Reservations', [])
+                for reservation in reservations:
+                    for instance in reservation.get('Instances', []):
+                        instance_id = instance.get('InstanceId')
+                        tags = instance.get('Tags', [])
+                        instance_name = next((tag['Value'] for tag in tags if tag.get('Key') == 'Name'), instance_id)
+
+                        instances.append({
+                            'id': instance_id,
+                            'name': instance_name
+                        })
+            elif isinstance(data, list):
+                # List of instances directly
+                for instance in data:
+                    instance_id = instance.get('InstanceId')
+                    if not instance_id:
+                        continue
+                    tags = instance.get('Tags', [])
+                    instance_name = next((tag['Value'] for tag in tags if tag.get('Key') == 'Name'), instance_id)
+
+                    instances.append({
+                        'id': instance_id,
+                        'name': instance_name
+                    })
+        except Exception as e:
+            print(f"Warning: Failed to load instances from {instances_file}: {e}", file=sys.stderr)
+
+        return instances
+
+    def _generate_metrics_html(self) -> str:
+        """
+        Generate CloudWatch metrics visualization HTML.
+
+        Returns:
+            HTML string with metrics charts
+        """
+        html_parts = []
+
+        # Get cluster instances
+        instances = self._get_cluster_instances()
+
+        if not instances:
+            return """
+            <div class="metrics-section">
+                <h2>CloudWatch Metrics</h2>
+                <div class="info-message">
+                    <p>No EC2 instance data available for metrics visualization.</p>
+                    <p>Metrics are collected during the data collection phase with <code>--collect</code>.</p>
+                </div>
+            </div>
+            """
+
+        html_parts.append('<div class="metrics-section">')
+        html_parts.append('<h2>CloudWatch Metrics</h2>')
+        html_parts.append(f'<p class="metrics-info">Showing metrics for {len(instances)} instance(s)</p>')
+
+        # Define metrics to visualize
+        metrics_config = [
+            ('CPUUtilization', 'CPU Utilization (%)', '#ff6384'),
+            ('mem_used_percent', 'Memory Utilization (%)', '#36a2eb'),
+            ('InstanceEBSIOPSExceededCheck', 'EBS IOPS Exceeded', '#ffcd56'),
+            ('InstanceEBSThroughputExceededCheck', 'EBS Throughput Exceeded', '#4bc0c0'),
+            ('bw_in_allowance_exceeded', 'Network Bandwidth IN Exceeded', '#9966ff'),
+            ('bw_out_allowance_exceeded', 'Network Bandwidth OUT Exceeded', '#ff9f40'),
+            ('pps_allowance_exceeded', 'Network PPS Exceeded', '#c9cbcf')
+        ]
+
+        chart_id = 0
+
+        for instance in instances:
+            instance_id = instance['id']
+            instance_name = instance['name']
+
+            html_parts.append(f'<div class="instance-metrics">')
+            html_parts.append(f'<h3>{instance_name}</h3>')
+            html_parts.append(f'<p class="instance-id">Instance ID: {instance_id}</p>')
+
+            for metric_name, metric_label, color in metrics_config:
+                metric_data = self._load_cloudwatch_metrics(instance_id, metric_name)
+
+                if not metric_data or not metric_data.get('Datapoints'):
+                    continue
+
+                datapoints = metric_data['Datapoints']
+
+                # Sort by timestamp
+                datapoints.sort(key=lambda x: x.get('Timestamp', ''))
+
+                # Prepare data for Chart.js
+                timestamps = []
+                values = []
+
+                for dp in datapoints:
+                    timestamp = dp.get('Timestamp')
+                    value = dp.get('Average') or dp.get('Sum') or dp.get('Maximum')
+
+                    if timestamp and value is not None:
+                        timestamps.append(timestamp)
+                        values.append(value)
+
+                if not timestamps:
+                    continue
+
+                chart_id += 1
+                canvas_id = f"metrics-chart-{chart_id}"
+
+                html_parts.append(f'<div class="metric-chart">')
+                html_parts.append(f'<h4>{metric_label}</h4>')
+                html_parts.append(f'<div class="chart-container">')
+                html_parts.append(f'    <canvas id="{canvas_id}"></canvas>')
+                html_parts.append(f'</div>')
+                html_parts.append(f'</div>')
+
+                # Generate Chart.js script
+                html_parts.append(f'<script>')
+                html_parts.append(f'(function() {{')
+                html_parts.append(f'    const ctx = document.getElementById("{canvas_id}").getContext("2d");')
+                html_parts.append(f'    const data = {{')
+                html_parts.append(f'        labels: {json.dumps(timestamps)},')
+                html_parts.append(f'        datasets: [{{')
+                html_parts.append(f'            label: "{metric_label}",')
+                html_parts.append(f'            data: {json.dumps(values)},')
+                html_parts.append(f'            borderColor: "{color}",')
+                html_parts.append(f'            backgroundColor: "{color}33",')
+                html_parts.append(f'            borderWidth: 2,')
+                html_parts.append(f'            fill: true,')
+                html_parts.append(f'            tension: 0.4')
+                html_parts.append(f'        }}]')
+                html_parts.append(f'    }};')
+                html_parts.append(f'    const config = {{')
+                html_parts.append(f'        type: "line",')
+                html_parts.append(f'        data: data,')
+                html_parts.append(f'        options: {{')
+                html_parts.append(f'            responsive: true,')
+                html_parts.append(f'            maintainAspectRatio: false,')
+                html_parts.append(f'            plugins: {{')
+                html_parts.append(f'                legend: {{')
+                html_parts.append(f'                    display: true,')
+                html_parts.append(f'                    position: "top"')
+                html_parts.append(f'                }},')
+                html_parts.append(f'                title: {{')
+                html_parts.append(f'                    display: false')
+                html_parts.append(f'                }}')
+                html_parts.append(f'            }},')
+                html_parts.append(f'            scales: {{')
+                html_parts.append(f'                x: {{')
+                html_parts.append(f'                    type: "time",')
+                html_parts.append(f'                    time: {{')
+                html_parts.append(f'                        displayFormats: {{')
+                html_parts.append(f'                            hour: "MMM d, HH:mm",')
+                html_parts.append(f'                            day: "MMM d"')
+                html_parts.append(f'                        }}')
+                html_parts.append(f'                    }},')
+                html_parts.append(f'                    title: {{')
+                html_parts.append(f'                        display: true,')
+                html_parts.append(f'                        text: "Time"')
+                html_parts.append(f'                    }}')
+                html_parts.append(f'                }},')
+                html_parts.append(f'                y: {{')
+                html_parts.append(f'                    beginAtZero: true,')
+                html_parts.append(f'                    title: {{')
+                html_parts.append(f'                        display: true,')
+                html_parts.append(f'                        text: "{metric_label}"')
+                html_parts.append(f'                    }}')
+                html_parts.append(f'                }}')
+                html_parts.append(f'            }}')
+                html_parts.append(f'        }}')
+                html_parts.append(f'    }};')
+                html_parts.append(f'    new Chart(ctx, config);')
+                html_parts.append(f'}})();')
+                html_parts.append(f'</script>')
+
+            html_parts.append(f'</div>')  # Close instance-metrics
+
+        html_parts.append('</div>')  # Close metrics-section
+
+        return '\n'.join(html_parts)
 
     def _generate_css(self) -> str:
         """Generate CSS styles"""
@@ -1713,6 +2088,10 @@ class HTMLReportGenerator:
             border-left: 4px solid #e74c3c;
         }
 
+        .category-header.status-access-denied {
+            border-left: 4px solid #ffc107;
+        }
+
         .category-header.status-error {
             border-left: 4px solid #ff6b35;
         }
@@ -1845,6 +2224,11 @@ class HTMLReportGenerator:
             color: #721c24;
         }
 
+        .status-access-denied .status-badge {
+            background: #fff3cd;
+            color: #856404;
+        }
+
         .status-error .status-badge {
             background: #ffe5d9;
             color: #d63e00;
@@ -1871,6 +2255,10 @@ class HTMLReportGenerator:
 
         .status-fail .test-details {
             color: #721c24;
+        }
+
+        .status-access-denied .test-details {
+            color: #856404;
         }
 
         .status-error .test-details {
@@ -1998,6 +2386,11 @@ class HTMLReportGenerator:
             font-weight: 600;
         }
 
+        .detail-value.status-failed-accessdenied {
+            color: #ffc107;
+            font-weight: 600;
+        }
+
         .detail-value.status-error {
             color: #ff6b35;
             font-weight: 600;
@@ -2022,6 +2415,12 @@ class HTMLReportGenerator:
             background: #fff5f5;
             border-color: #f8d7da;
             color: #721c24;
+        }
+
+        .status-reason.status-access-denied {
+            background: #fffef5;
+            border-color: #fff3cd;
+            color: #856404;
         }
 
         .status-reason.status-error {
@@ -2333,6 +2732,112 @@ class HTMLReportGenerator:
             font-size: 13px;
             font-style: italic;
         }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .tab-button {
+            padding: 12px 24px;
+            background: #f8f9fa;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s;
+            color: #495057;
+        }
+
+        .tab-button:hover {
+            background: #e9ecef;
+            color: #212529;
+        }
+
+        .tab-button.active {
+            background: white;
+            color: #007bff;
+            border-bottom-color: #007bff;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Metrics Section */
+        .metrics-section {
+            padding: 20px;
+        }
+
+        .metrics-info {
+            color: #6c757d;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .instance-metrics {
+            background: white;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .instance-metrics h3 {
+            color: #212529;
+            margin-bottom: 8px;
+        }
+
+        .instance-id {
+            color: #6c757d;
+            font-size: 14px;
+            margin-bottom: 20px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .metric-chart {
+            margin: 30px 0;
+        }
+
+        .metric-chart h4 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 20px;
+        }
+
+        .info-message {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 20px 0;
+        }
+
+        .info-message p {
+            margin: 8px 0;
+            color: #004085;
+        }
+
+        .info-message code {
+            background: #004085;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
     </style>"""
 
     def _generate_javascript(self) -> str:
@@ -2410,4 +2915,28 @@ class HTMLReportGenerator:
 
         // Handle hash changes (when clicking links)
         window.addEventListener('hashchange', expandTestFromHash);
+
+        // Tab switching function
+        function switchTab(tabName) {
+            // Hide all tab contents
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => {
+                content.classList.remove('active');
+            });
+
+            // Deactivate all tab buttons
+            const tabButtons = document.querySelectorAll('.tab-button');
+            tabButtons.forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Show the selected tab content
+            const selectedTab = document.getElementById(tabName + '-tab');
+            if (selectedTab) {
+                selectedTab.classList.add('active');
+            }
+
+            // Activate the clicked button
+            event.target.classList.add('active');
+        }
     </script>"""

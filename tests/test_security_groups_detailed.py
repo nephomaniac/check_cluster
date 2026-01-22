@@ -215,6 +215,8 @@ def test_security_groups_data_exists(cluster_data: ClusterData):
     Failure indicates: Security group data was not collected or doesn't exist in AWS.
 
     Success indicates: Security group data exists and was successfully collected.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     sg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_security_groups.json"
 
@@ -279,7 +281,9 @@ def test_security_groups_data_exists(cluster_data: ClusterData):
 @pytest.mark.security_groups
 @pytest.mark.controlplane
 def test_controlplane_security_group_exists(cluster_data: ClusterData, infra_id: str):
-    """Control plane security group must exist for master nodes"""
+    """Control plane security group must exist for master nodes
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     security_groups = get_security_groups(cluster_data)
 
     if not security_groups:
@@ -321,6 +325,8 @@ def test_controlplane_api_server_access(cluster_data: ClusterData, infra_id: str
     - Control plane security group (master-to-master)
     - Node security group (nodes-to-master)
     - API server load balancer security group
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -406,6 +412,8 @@ def test_controlplane_etcd_access(cluster_data: ClusterData, infra_id: str):
     Expected:
     - TCP port 2379 (etcd client) - ingress from control plane only
     - TCP port 2380 (etcd peer) - ingress from control plane only
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -513,6 +521,8 @@ def test_controlplane_mcs_access(cluster_data: ClusterData, infra_id: str):
     Expected: TCP port 22623 ingress from:
     - Control plane security group
     - Node security group
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -577,6 +587,8 @@ def test_controlplane_kube_components_access(cluster_data: ClusterData, infra_id
     Expected:
     - TCP port 10257 (kube-controller-manager) - ingress from control plane and nodes
     - TCP port 10259 (kube-scheduler) - ingress from control plane and nodes
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -674,7 +686,9 @@ def test_controlplane_kube_components_access(cluster_data: ClusterData, infra_id
 @pytest.mark.security_groups
 @pytest.mark.node
 def test_node_security_group_exists(cluster_data: ClusterData, infra_id: str):
-    """Worker/infra node security group must exist"""
+    """Worker/infra node security group must exist
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     security_groups = get_security_groups(cluster_data)
 
     if not security_groups:
@@ -715,6 +729,8 @@ def test_node_kubelet_access(cluster_data: ClusterData, infra_id: str):
     Expected: TCP port 10250 ingress from:
     - Control plane security group (for metrics scraping)
     - Node security group (for pod-to-pod communication)
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -779,6 +795,8 @@ def test_node_service_ports_access(cluster_data: ClusterData, infra_id: str):
     Expected:
     - TCP ports 30000-32767 ingress from node security group
     - UDP ports 30000-32767 ingress from node security group
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -879,6 +897,8 @@ def test_node_ssh_access(cluster_data: ClusterData, infra_id: str):
     Expected: TCP port 22 ingress from:
     - Control plane security group
     - Node security group
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -948,6 +968,8 @@ def test_network_overlay_vxlan_geneve(cluster_data: ClusterData, infra_id: str):
     - UDP port 4789 (VXLAN)
     - UDP port 6081 (Geneve)
     - TCP ports 6441-6442 (OVN database)
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -1066,6 +1088,8 @@ def test_ipsec_vpn_access(cluster_data: ClusterData, infra_id: str):
     - Protocol 50 (ESP - Encapsulating Security Payload)
     - UDP port 500 (IKE - Internet Key Exchange)
     - UDP port 4500 (IKE NAT traversal)
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -1180,7 +1204,9 @@ def test_ipsec_vpn_access(cluster_data: ClusterData, infra_id: str):
 @pytest.mark.security_groups
 @pytest.mark.loadbalancer
 def test_api_loadbalancer_security_group_exists(cluster_data: ClusterData, infra_id: str):
-    """API server load balancer security group must exist"""
+    """API server load balancer security group must exist
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     security_groups = get_security_groups(cluster_data)
 
     if not security_groups:
@@ -1215,7 +1241,9 @@ def test_api_loadbalancer_security_group_exists(cluster_data: ClusterData, infra
 @pytest.mark.security_groups
 @pytest.mark.loadbalancer
 def test_application_loadbalancer_security_group_exists(cluster_data: ClusterData, infra_id: str):
-    """Application (router) load balancer security group must exist"""
+    """Application (router) load balancer security group must exist
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     security_groups = get_security_groups(cluster_data)
 
     if not security_groups:
@@ -1263,6 +1291,8 @@ def test_all_security_groups_allow_egress(cluster_data: ClusterData, infra_id: s
     All security groups must allow egress traffic.
 
     Expected: Egress rule allowing all protocols to 0.0.0.0/0
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 
@@ -1343,6 +1373,8 @@ def test_icmp_allowed_between_nodes(cluster_data: ClusterData, infra_id: str):
     ICMP must be allowed between all cluster nodes for connectivity checks.
 
     Expected: ICMP ingress in both control plane and node security groups
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     security_groups = get_security_groups(cluster_data)
 

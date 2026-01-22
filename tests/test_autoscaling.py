@@ -3,6 +3,11 @@ Auto Scaling Groups Tests
 
 Validates Auto Scaling Group configuration for ROSA worker nodes.
 Tests ASG capacity, health checks, and launch template configuration.
+
+Documentation:
+- ROSA Autoscaling: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-about-autoscaling-nodes
+- AWS Auto Scaling: https://docs.aws.amazon.com/autoscaling/
+- ROSA Machine Pools: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
 """
 
 import pytest
@@ -13,7 +18,9 @@ from models.cluster import ClusterData
 
 @pytest.mark.instances
 def test_autoscaling_groups_exist(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have Auto Scaling Groups for worker nodes"""
+    """Cluster should have Auto Scaling Groups for worker nodes
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
@@ -34,7 +41,9 @@ def test_autoscaling_groups_exist(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.instances
 def test_asgs_have_desired_capacity(cluster_data: ClusterData, infra_id: str):
-    """Auto Scaling Groups should have desired capacity set"""
+    """Auto Scaling Groups should have desired capacity set
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
@@ -62,7 +71,9 @@ def test_asgs_have_desired_capacity(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.instances
 def test_asgs_have_min_max_capacity(cluster_data: ClusterData, infra_id: str):
-    """Auto Scaling Groups should have min and max capacity configured"""
+    """Auto Scaling Groups should have min and max capacity configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
@@ -97,7 +108,9 @@ def test_asgs_have_min_max_capacity(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.instances
 def test_asgs_have_health_check_configured(cluster_data: ClusterData, infra_id: str):
-    """Auto Scaling Groups should have health checks configured"""
+    """Auto Scaling Groups should have health checks configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
@@ -125,7 +138,9 @@ def test_asgs_have_health_check_configured(cluster_data: ClusterData, infra_id: 
 
 @pytest.mark.instances
 def test_asgs_in_multiple_azs(cluster_data: ClusterData, infra_id: str):
-    """Auto Scaling Groups should span multiple AZs for HA (multi-AZ clusters)"""
+    """Auto Scaling Groups should span multiple AZs for HA (multi-AZ clusters)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
@@ -159,7 +174,9 @@ def test_asgs_in_multiple_azs(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.instances
 def test_asgs_have_launch_template_or_config(cluster_data: ClusterData, infra_id: str):
-    """Auto Scaling Groups should have launch template or launch configuration"""
+    """Auto Scaling Groups should have launch template or launch configuration
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():
@@ -188,7 +205,9 @@ def test_asgs_have_launch_template_or_config(cluster_data: ClusterData, infra_id
 
 @pytest.mark.instances
 def test_asgs_have_tags(cluster_data: ClusterData, infra_id: str):
-    """Auto Scaling Groups should have tags for identification"""
+    """Auto Scaling Groups should have tags for identification
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-nodes-machinepools-about
+    """
     asg_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_autoscaling_groups.json"
 
     if not asg_file.exists():

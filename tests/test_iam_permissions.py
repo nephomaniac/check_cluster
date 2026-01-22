@@ -3,6 +3,11 @@ IAM Permission Tests
 
 Validates AWS IAM permissions by checking API request logs for permission errors.
 These tests help diagnose cluster installation/support issues related to IAM permissions.
+
+Documentation:
+- ROSA Required IAM Permissions: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-required-aws-service-quotas#rosa-required-aws-service-quotas
+- AWS IAM Best Practices: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+- Troubleshooting IAM: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-iam-resources
 """
 
 import pytest
@@ -25,6 +30,8 @@ def test_no_permission_errors_in_api_requests(cluster_data: ClusterData):
     Remediation: Review permission errors below and add missing IAM permissions to the user/role.
     Check the AWS IAM policy attached to the credentials used for data collection.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: CRITICAL - Permission errors prevent complete cluster diagnostics
     """
     if not cluster_data.api_requests:
@@ -99,6 +106,8 @@ def test_no_failed_api_requests(cluster_data: ClusterData):
 
     Remediation: Review failed requests below and address the root cause (permissions, throttling, etc.).
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: HIGH - Failed requests may indicate incomplete cluster diagnostics
     """
     if not cluster_data.api_requests:
@@ -176,6 +185,8 @@ def test_ec2_permissions_available(cluster_data: ClusterData):
         ec2:DescribeInternetGateways
         ec2:DescribeNatGateways
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: MEDIUM - EC2 data is important for cluster diagnostics
     """
     if not cluster_data.api_requests:
@@ -231,6 +242,8 @@ def test_elb_permissions_available(cluster_data: ClusterData):
         elasticloadbalancing:DescribeTargetHealth
         elasticloadbalancing:DescribeListeners
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: MEDIUM - Load balancer data is important for cluster access diagnostics
     """
     if not cluster_data.api_requests:
@@ -285,6 +298,8 @@ def test_route53_permissions_available(cluster_data: ClusterData):
         route53:ListResourceRecordSets
         route53:GetHostedZone
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: MEDIUM - DNS data is important for cluster access diagnostics
     """
     if not cluster_data.api_requests:
@@ -339,6 +354,8 @@ def test_iam_permissions_available(cluster_data: ClusterData):
         iam:GetRole
         iam:GetInstanceProfile
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: LOW - IAM data is helpful but not critical for cluster diagnostics
     """
     if not cluster_data.api_requests:
@@ -384,6 +401,8 @@ def test_api_request_summary(cluster_data: ClusterData):
 
     Why: Provides overview of data collection operations.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: INFO - Informational test only
     """
     if not cluster_data.api_requests:
@@ -435,6 +454,8 @@ def test_critical_operations_succeeded(cluster_data: ClusterData):
 
     Remediation: Ensure IAM permissions are available for critical operations.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: HIGH - Critical operations are required for comprehensive diagnostics
     """
     if not cluster_data.api_requests:
@@ -497,6 +518,8 @@ def test_no_throttling_errors(cluster_data: ClusterData):
 
     Remediation: Retry data collection or request AWS API rate limit increase.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-service-quotas
     Severity: MEDIUM - Throttling may result in incomplete data
     """
     if not cluster_data.api_requests:

@@ -141,7 +141,7 @@ def test_worker_role_exists(cluster_data: ClusterData):
             error_msg += "  • No IAM API calls found in request log\n"
             error_msg += "  • IAM data collection was not performed\n"
             error_msg += "\n🔧 Remediation:\n"
-            error_msg += "  • Run: python get_install_artifacts.py -c <cluster-id> --include-iam\n"
+            error_msg += "  • Run: check_cluster.py <cluster-id> --collect --resources=iam\n"
 
         elif availability['reason'] == 'iam_api_call_failed':
             api_error = availability['api_error']
@@ -235,6 +235,8 @@ def test_worker_role_has_managed_policy(cluster_data: ClusterData):
     Remediation:
     aws iam attach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/ROSAWorkerInstancePolicy
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Worker nodes cannot function without required permissions
     """
     availability = check_iam_data_availability(cluster_data, 'worker')
@@ -303,6 +305,8 @@ def test_worker_role_has_instance_profile(cluster_data: ClusterData):
 
     Success indicates: Instance profile is configured.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: MEDIUM - Instance profile is required for EC2 role assumption
     """
     availability = check_iam_data_availability(cluster_data, 'worker')

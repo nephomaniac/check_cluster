@@ -205,6 +205,8 @@ def test_target_health_data_collected(cluster_data: ClusterData):
     groups may not have been created yet.
 
     Success indicates: Target health data is available for analysis.
+    
+    Documentation: https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html
     """
     target_health_files = get_target_health_files(cluster_data)
 
@@ -511,6 +513,8 @@ def test_machine_config_server_targets_healthy(cluster_data: ClusterData, reques
         $ aws elbv2 describe-target-health --target-group-arn <arn> \\
             --region <region>
 
+
+    Documentation: https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html
     Severity: HIGH - Prevents node provisioning and scaling
     """
     target_health_files = get_target_health_files(cluster_data)
@@ -753,6 +757,8 @@ def test_all_targets_registered(cluster_data: ClusterData):
     - Auto-scaling issues
 
     Success indicates: All expected master instances are registered as targets.
+    
+    Documentation: https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html
     """
     target_health_files = get_target_health_files(cluster_data)
 

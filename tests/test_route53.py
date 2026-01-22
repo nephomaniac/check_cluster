@@ -2,6 +2,10 @@
 Route53 DNS Tests
 
 Validates Route53 hosted zones and DNS records for ROSA cluster.
+
+Documentation:
+- ROSA DNS Configuration: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-with-customizations#prerequisites_rosa-sts-creating-cluster-using-customizations
+- AWS Route53: https://docs.aws.amazon.com/route53/latest/developerguide/Welcome.html
 """
 
 import json
@@ -58,6 +62,8 @@ def test_hosted_zone_exists(cluster_data: ClusterData, request):
 
     Failure indicates: DNS hosting is not configured, which would prevent DNS resolution
     for the cluster API and could indicate incomplete cluster setup.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-dns-requirements
     """
     zones = cluster_data.route53_zones
 
@@ -169,7 +175,9 @@ def test_hosted_zone_exists(cluster_data: ClusterData, request):
 
 @pytest.mark.route53
 def test_hosted_zone_private(cluster_data: ClusterData, is_private_cluster: bool):
-    """Private clusters should have private hosted zones"""
+    """Private clusters should have private hosted zones
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-dns-requirements
+    """
     zones = cluster_data.route53_zones
 
     if not zones:
@@ -206,7 +214,9 @@ def test_hosted_zone_private(cluster_data: ClusterData, is_private_cluster: bool
 
 @pytest.mark.route53
 def test_api_dns_record_exists(cluster_data: ClusterData):
-    """API DNS record must exist"""
+    """API DNS record must exist
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-dns-requirements
+    """
     cluster_name = cluster_data.cluster_name
 
     if not cluster_name:
@@ -236,7 +246,9 @@ def test_api_dns_record_exists(cluster_data: ClusterData):
 
 @pytest.mark.route53
 def test_hosted_zone_has_name_servers(cluster_data: ClusterData):
-    """Hosted zone must have name servers configured"""
+    """Hosted zone must have name servers configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-dns-requirements
+    """
     zones = cluster_data.route53_zones
 
     if not zones:
@@ -264,6 +276,8 @@ def test_cluster_domain_configured(cluster_data: ClusterData):
 
     Failure indicates: The cluster domain is not configured in metadata, which would prevent
     proper DNS setup and could indicate incomplete installation configuration.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-dns-requirements
     """
     # Try different possible locations for domain
     dns_config = cluster_data.cluster_json.get('dns', {})

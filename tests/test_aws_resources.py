@@ -3,6 +3,12 @@ Tests for AWS Resources from cluster.json
 
 Validates that AWS resources specified in cluster.json .aws section
 were successfully fetched from AWS and saved to files.
+
+Documentation:
+- ROSA IAM Resources: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/introduction_to_rosa/rosa-sts-about-iam-resources
+- ROSA Account Roles: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/architecture/rosa-sts-about-iam-resources#rosa-sts-account-wide-roles-and-policies
+- ROSA Operator Roles: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/architecture/rosa-sts-about-iam-resources#rosa-sts-operator-roles
+- OIDC Provider Configuration: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/architecture/rosa-sts-about-iam-resources#rosa-sts-about-oidc
 """
 
 import json
@@ -77,6 +83,8 @@ def test_sts_configuration_exists(cluster_data: ClusterData, sts_config):
 
     Failure indicates: This may not be an STS cluster, or cluster configuration
     is incomplete.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not sts_config:
         print("\n✗ No STS configuration in cluster.json")
@@ -108,7 +116,9 @@ def test_installer_role_fetched(cluster_data: ClusterData, sts_config):
     infrastructure. It must exist in AWS for cluster operations.
 
     Failure indicates: Role fetch failed or role doesn't exist in AWS.
-    Check get_install_artifacts.py output for errors.
+    Check data collection output for errors.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -148,7 +158,7 @@ def test_installer_role_fetched(cluster_data: ClusterData, sts_config):
     assert role_file.exists(), \
         f"Installer role file not found: {role_file.name}. " \
         f"See AWS API request error details above. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -159,6 +169,8 @@ def test_support_role_fetched(cluster_data: ClusterData, sts_config):
     the cluster when needed.
 
     Failure indicates: Role fetch failed or role doesn't exist in AWS.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -195,7 +207,7 @@ def test_support_role_fetched(cluster_data: ClusterData, sts_config):
     assert role_file.exists(), \
         f"Support role file not found: {role_file.name}. " \
         f"See AWS API request error details above. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -206,6 +218,8 @@ def test_master_instance_role_fetched(cluster_data: ClusterData, sts_config):
     for cluster control plane operations.
 
     Failure indicates: Role fetch failed or role doesn't exist in AWS.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -244,7 +258,7 @@ def test_master_instance_role_fetched(cluster_data: ClusterData, sts_config):
     assert role_file.exists(), \
         f"Master instance role file not found: {role_file.name}. " \
         f"See AWS API request error details above. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -255,6 +269,8 @@ def test_worker_instance_role_fetched(cluster_data: ClusterData, sts_config):
     for running workloads and cluster operations.
 
     Failure indicates: Role fetch failed or role doesn't exist in AWS.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -293,7 +309,7 @@ def test_worker_instance_role_fetched(cluster_data: ClusterData, sts_config):
     assert role_file.exists(), \
         f"Worker instance role file not found: {role_file.name}. " \
         f"See AWS API request error details above. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -305,6 +321,8 @@ def test_all_operator_roles_fetched(cluster_data: ClusterData, sts_config):
 
     Failure indicates: One or more operator roles failed to fetch or don't
     exist in AWS. This could cause operator functionality issues.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -348,7 +366,7 @@ def test_all_operator_roles_fetched(cluster_data: ClusterData, sts_config):
 
     assert not missing_roles, \
         f"Operator role files not found for: {', '.join(missing_roles)}. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -360,6 +378,8 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData, sts_config):
 
     Failure indicates: Policy fetch failed. This is non-critical but helpful
     for troubleshooting.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -398,7 +418,7 @@ def test_iam_roles_have_policies_fetched(cluster_data: ClusterData, sts_config):
 
         assert has_policies, \
             f"No policy files found for installer role {role_name}. " \
-            f"Run get_install_artifacts.py to fetch IAM resources."
+            f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -410,6 +430,8 @@ def test_oidc_provider_fetched(cluster_data: ClusterData, sts_config):
 
     Failure indicates: OIDC provider fetch failed or provider doesn't exist
     in AWS. This would prevent operators from functioning correctly.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -454,11 +476,11 @@ def test_oidc_provider_fetched(cluster_data: ClusterData, sts_config):
     assert oidc_list_file.exists(), \
         f"OIDC providers list file not found: {oidc_list_file.name}. " \
         f"See AWS API request error details above. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
     assert oidc_files, \
         f"No OIDC provider detail files found. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."
 
 
 @pytest.mark.aws_resources
@@ -468,6 +490,8 @@ def test_iam_role_files_contain_valid_data(cluster_data: ClusterData, sts_config
     Why: Ensures the fetched role data is complete and parseable.
 
     Failure indicates: File corruption or incomplete data fetch.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -516,6 +540,8 @@ def test_audit_log_role_fetched_if_configured(cluster_data: ClusterData, aws_con
 
     Failure indicates: Role fetch failed. This is optional, so failure is
     non-critical if audit logging isn't configured.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs
     """
     if not has_sts_enabled(cluster_data):
         pytest.skip("STS not enabled")
@@ -554,4 +580,4 @@ def test_audit_log_role_fetched_if_configured(cluster_data: ClusterData, aws_con
     assert role_file.exists(), \
         f"Audit log role file not found: {role_file.name}. " \
         f"See AWS API request error details above. " \
-        f"Run get_install_artifacts.py to fetch IAM resources."
+        f"Run check_cluster.py <cluster-id> --collect --resources=iam to fetch IAM resources."

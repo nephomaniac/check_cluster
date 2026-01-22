@@ -3,6 +3,11 @@ Storage Tests
 
 This module validates storage infrastructure components:
 - EBS Volumes (state, encryption, attachments)
+
+Documentation:
+- ROSA Storage: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage/index
+- AWS EBS Volumes: https://docs.aws.amazon.com/ebs/latest/userguide/what-is-ebs.html
+- ROSA Persistent Storage: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage/rosa-persistent-storage-overview
 - Volume types and sizes
 - etcd volumes for control plane nodes
 """
@@ -63,6 +68,8 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str, request):
     Failure indicates: No EBS volume data was collected or volumes don't exist in AWS.
 
     Success indicates: EBS volume data exists and was successfully collected.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
     """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
@@ -176,7 +183,9 @@ def test_ebs_volumes_exist(cluster_data: ClusterData, infra_id: str, request):
 
 @pytest.mark.storage
 def test_ebs_volumes_in_use_or_available(cluster_data: ClusterData, infra_id: str):
-    """EBS volumes should be in 'in-use' or 'available' state"""
+    """EBS volumes should be in 'in-use' or 'available' state
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
@@ -228,7 +237,9 @@ def test_ebs_volumes_in_use_or_available(cluster_data: ClusterData, infra_id: st
 
 @pytest.mark.storage
 def test_ebs_volumes_encrypted(cluster_data: ClusterData, infra_id: str):
-    """EBS volumes should be encrypted for security compliance"""
+    """EBS volumes should be encrypted for security compliance
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
@@ -287,7 +298,9 @@ def test_ebs_volumes_encrypted(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.storage
 def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str, request):
-    """Control plane (master) nodes should have dedicated etcd volumes"""
+    """Control plane (master) nodes should have dedicated etcd volumes
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
     instances_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
 
@@ -430,7 +443,9 @@ def test_master_nodes_have_etcd_volumes(cluster_data: ClusterData, infra_id: str
 
 @pytest.mark.storage
 def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str, request):
-    """Volume attachments should be in 'attached' state"""
+    """Volume attachments should be in 'attached' state
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
@@ -496,7 +511,9 @@ def test_volume_attachments_attached(cluster_data: ClusterData, infra_id: str, r
 
 @pytest.mark.storage
 def test_volume_types_are_supported(cluster_data: ClusterData, infra_id: str):
-    """EBS volumes should use supported volume types (gp2, gp3, io1, io2)"""
+    """EBS volumes should use supported volume types (gp2, gp3, io1, io2)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():
@@ -539,7 +556,9 @@ def test_volume_types_are_supported(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.storage
 def test_volumes_in_correct_availability_zone(cluster_data: ClusterData, infra_id: str):
-    """EBS volumes should be in the same AZ as their attached instances"""
+    """EBS volumes should be in the same AZ as their attached instances
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
     instances_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ec2_instances.json"
 
@@ -694,7 +713,9 @@ def test_volumes_in_correct_availability_zone(cluster_data: ClusterData, infra_i
 
 @pytest.mark.storage
 def test_no_volumes_in_deleting_state(cluster_data: ClusterData, infra_id: str):
-    """No EBS volumes should be stuck in 'deleting' state"""
+    """No EBS volumes should be stuck in 'deleting' state
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/storage
+    """
     volumes_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_ebs_volumes.json"
 
     if not volumes_file.exists():

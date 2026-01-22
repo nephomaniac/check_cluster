@@ -2,6 +2,11 @@
 VPC Configuration Tests
 
 Validates VPC DNS settings, DHCP options, and network configuration for ROSA clusters.
+
+Documentation:
+- ROSA VPC Requirements: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
+- AWS VPC Configuration: https://docs.aws.amazon.com/vpc/latest/userguide/configure-your-vpc.html
+- ROSA Cluster Prerequisites: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-hcp-prereqs
 """
 
 import json
@@ -60,6 +65,8 @@ def test_vpc_exists(cluster_data: ClusterData, request):
     network infrastructure or data collection failed.
 
     Success indicates: VPC exists and was successfully collected from AWS.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
     """
     vpcs = cluster_data.vpcs
 
@@ -153,6 +160,8 @@ def test_vpc_dns_hostnames_enabled(cluster_data: ClusterData):
 
     Failure indicates: The VPC is not configured for DNS hostnames, which could prevent
     proper service discovery and internal DNS resolution within the cluster.
+    
+    Documentation: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-dns.html#vpc-dns-hostnames
     """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
@@ -192,6 +201,8 @@ def test_vpc_dns_support_enabled(cluster_data: ClusterData):
 
     Failure indicates: DNS resolution within the VPC is disabled, which would prevent
     nodes from resolving DNS names and break critical cluster functionality.
+    
+    Documentation: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-dns.html#vpc-dns-support
     """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
@@ -231,6 +242,8 @@ def test_vpc_cidr_block_configured(cluster_data: ClusterData):
 
     Failure indicates: VPC has no CIDR block configuration, which means
     no IP addresses can be allocated and the network cannot function.
+    
+    Documentation: https://docs.aws.amazon.com/vpc/latest/userguide/configure-your-vpc.html#vpc-cidr-blocks
     """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
@@ -302,7 +315,9 @@ def test_vpc_cidr_block_configured(cluster_data: ClusterData):
 
 @pytest.mark.vpc
 def test_vpc_state_available(cluster_data: ClusterData):
-    """VPC must be in available state"""
+    """VPC must be in available state
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
+    """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:
@@ -333,7 +348,9 @@ def test_vpc_state_available(cluster_data: ClusterData):
 
 @pytest.mark.vpc
 def test_dhcp_options_associated(cluster_data: ClusterData):
-    """VPC must have DHCP options set associated"""
+    """VPC must have DHCP options set associated
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-vpc-requirements
+    """
     vpcs = cluster_data.vpcs.get('Vpcs', [])
 
     if not vpcs:

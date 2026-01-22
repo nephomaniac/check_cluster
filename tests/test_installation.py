@@ -2,6 +2,11 @@
 Installation Status Tests
 
 Validates ROSA cluster installation status and configuration.
+
+Documentation:
+- ROSA Installation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
+- Installation Troubleshooting: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-installations
+- ROSA Cluster Lifecycle: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/cluster_administration/rosa-cluster-lifecycle
 """
 
 import json
@@ -18,6 +23,8 @@ def test_cluster_has_id(cluster_data: ClusterData):
 
     Failure indicates: Critical cluster metadata is missing from the configuration,
     suggesting incomplete installation or corrupted cluster data.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     cluster_id = cluster_data.cluster_id
 
@@ -36,6 +43,8 @@ def test_cluster_has_infra_id(cluster_data: ClusterData):
 
     Failure indicates: Critical infrastructure metadata is missing, preventing proper
     resource identification and potentially causing resource management failures.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     infra_id = cluster_data.infra_id
 
@@ -54,6 +63,8 @@ def test_cluster_state(cluster_data: ClusterData):
 
     Failure indicates: The cluster is not in an operational state. It may be installing,
     upgrading, degraded, or in error state requiring investigation of cluster operators.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     state = cluster_data.cluster_json.get('state', '').lower()
 
@@ -83,6 +94,8 @@ def test_cluster_version(cluster_data: ClusterData):
 
     Failure indicates: Version metadata is missing or malformed, which could indicate
     incomplete installation or data collection issues.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     version = cluster_data.cluster_json.get('openshift_version', '')
 
@@ -105,6 +118,8 @@ def test_cluster_region(cluster_data: ClusterData):
 
     Failure indicates: Region metadata is missing or invalid, which could prevent
     proper resource management and regional service configurations.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     region = cluster_data.cluster_json.get('region', {}).get('id', '')
 
@@ -128,6 +143,8 @@ def test_cluster_api_url(cluster_data: ClusterData):
 
     Failure indicates: The Kubernetes API endpoint is not configured or DNS records
     are missing, preventing cluster access and management operations.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     api_url = cluster_data.cluster_json.get('api', {}).get('url', '')
 
@@ -140,7 +157,9 @@ def test_cluster_api_url(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_console_url(cluster_data: ClusterData):
-    """Cluster should have console URL configured"""
+    """Cluster should have console URL configured
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
+    """
     console_url = cluster_data.cluster_json.get('console', {}).get('url', '')
 
     if not console_url:
@@ -162,6 +181,8 @@ def test_cluster_has_nodes(cluster_data: ClusterData):
 
     Failure indicates: No compute nodes are configured in the cluster specification,
     suggesting incomplete installation or severe cluster degradation.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     nodes = cluster_data.cluster_json.get('nodes', {})
 
@@ -189,6 +210,8 @@ def test_cluster_network_configured(cluster_data: ClusterData):
 
     Failure indicates: Core networking configuration is missing, which would prevent
     pod networking from functioning and make the cluster inoperable.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     network = cluster_data.cluster_json.get('network', {})
 
@@ -212,7 +235,9 @@ def test_cluster_network_configured(cluster_data: ClusterData):
 
 @pytest.mark.installation
 def test_cluster_multi_az(cluster_data: ClusterData):
-    """Cluster multi-AZ configuration should match deployment (configuration consistency check)"""
+    """Cluster multi-AZ configuration should match deployment (configuration consistency check)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
+    """
     # Get the configured multi-AZ setting
     is_multi_az = cluster_data.cluster_json.get('multi_az', False)
 
@@ -261,6 +286,8 @@ def test_cluster_subscription_type(cluster_data: ClusterData):
 
     Failure indicates: Subscription metadata is missing, which may indicate issues
     with cluster registration or incomplete provisioning through Red Hat.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly
     """
     subscription = cluster_data.cluster_json.get('subscription', {})
 

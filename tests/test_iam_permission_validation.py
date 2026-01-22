@@ -3,6 +3,11 @@ IAM Permission Validation Tests
 
 Individual permission checks with checkbox-style output for HTML reports.
 Each permission or group of related permissions gets its own test.
+
+Documentation:
+- ROSA IAM Permissions: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/introduction_to_rosa/rosa-sts-about-iam-resources
+- IAM Troubleshooting: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/troubleshooting/rosa-troubleshooting-iam-resources
+- AWS IAM Policy Simulator: https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html
 """
 
 import pytest
@@ -102,6 +107,8 @@ def test_ec2_describe_instances_permission(cluster_data: ClusterData):
 
     Success indicates: Permission is available.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: CRITICAL - Required for cluster diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -141,6 +148,8 @@ def test_ec2_vpc_permissions(cluster_data: ClusterData):
 
     Success indicates: VPC permissions are available.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: HIGH - Required for network diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -190,6 +199,8 @@ def test_ec2_volume_permissions(cluster_data: ClusterData):
 
     Success indicates: Volume permissions are available.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: HIGH - Required for storage diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -233,6 +244,8 @@ def test_elb_describe_permissions(cluster_data: ClusterData):
 
     Success indicates: ELB permissions are available.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: HIGH - Required for load balancer diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -282,6 +295,8 @@ def test_route53_permissions(cluster_data: ClusterData):
 
     Success indicates: Route53 permissions are available.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: MEDIUM - Required for DNS diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -326,6 +341,8 @@ def test_iam_read_permissions(cluster_data: ClusterData):
 
     Success indicates: IAM read permissions are available.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: MEDIUM - Required for IAM diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -367,6 +384,8 @@ def test_s3_permissions(cluster_data: ClusterData):
 
     Why: S3 may be used for image registry or backup storage.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: LOW - Optional depending on cluster configuration
     """
     api_status = check_api_requests_available(cluster_data)
@@ -413,6 +432,8 @@ def test_cloudtrail_permissions(cluster_data: ClusterData):
 
     Why: CloudTrail provides audit logs for diagnostic analysis.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: LOW - Optional for diagnostics
     """
     api_status = check_api_requests_available(cluster_data)
@@ -458,6 +479,8 @@ def test_all_permissions_summary(cluster_data: ClusterData):
 
     Why: Provides complete overview of IAM permission status.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-required-aws-iam-permissions
     Severity: INFO - Informational test only
     """
     api_status = check_api_requests_available(cluster_data)

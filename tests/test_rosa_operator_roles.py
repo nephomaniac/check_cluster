@@ -3,6 +3,11 @@ ROSA Operator Role Individual Tests
 
 Individual tests for each ROSA operator role required by the cluster.
 Each operator has its own test to provide granular pass/fail status.
+
+Documentation:
+- ROSA Operator Roles: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/architecture/rosa-sts-about-iam-resources#rosa-sts-operator-roles
+- Operator IAM Roles Reference: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/introduction_to_rosa/rosa-sts-about-iam-resources#rosa-sts-understanding-aws-account-association
+- Creating Operator Roles: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/install_rosa_classic_clusters/rosa-sts-creating-a-cluster-quickly#rosa-sts-creating-operator-roles-and-policies_rosa-sts-creating-a-cluster-quickly
 """
 
 import pytest
@@ -108,6 +113,8 @@ def test_ebs_csi_driver_operator_role_exists(cluster_data: ClusterData):
     1. Create operator roles: rosa create operator-roles --cluster <cluster-name>
     2. Verify role exists: aws iam get-role --role-name <prefix>-openshift-cluster-csi-drivers-ebs-cloud-credentials
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: CRITICAL - Required for persistent volume provisioning
     """
     result = check_operator_role(cluster_data, 'ebs-cloud-credentials')
@@ -177,6 +184,8 @@ def test_cloud_credentials_operator_role_exists(cluster_data: ClusterData):
 
     Success indicates: Cloud credentials operator role exists.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: HIGH - Required for operator credential management
     """
     result = check_operator_role(cluster_data, 'cloud-credentials')
@@ -219,6 +228,8 @@ def test_ingress_operator_role_exists(cluster_data: ClusterData):
     1. Create operator roles: rosa create operator-roles --cluster <cluster-name>
     2. Verify role: aws iam get-role --role-name <prefix>-openshift-ingress-operator-cloud-credentials
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: HIGH - Required for application ingress
     """
     result = check_operator_role(cluster_data, 'ingress-operator-cloud-credentials')
@@ -271,6 +282,8 @@ def test_image_registry_operator_role_exists(cluster_data: ClusterData):
 
     Success indicates: Image registry operator role exists.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: HIGH - Required for image registry storage
     """
     result = check_operator_role(cluster_data, 'image-registry')
@@ -309,6 +322,8 @@ def test_machine_api_operator_role_exists(cluster_data: ClusterData):
 
     Success indicates: Machine API operator role exists.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: HIGH - Required for node management and scaling
     """
     result = check_operator_role(cluster_data, 'machine-api-aws')
@@ -343,6 +358,8 @@ def test_cloud_network_config_controller_role_exists(cluster_data: ClusterData):
 
     Success indicates: Cloud network config controller role exists.
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: MEDIUM - Required for cloud network configuration
     """
     result = check_operator_role(cluster_data, 'cloud-network-config-controller')
@@ -368,7 +385,9 @@ def test_cloud_network_config_controller_role_exists(cluster_data: ClusterData):
 @pytest.mark.operator_roles
 @pytest.mark.severity("LOW")
 def test_cloud_controller_manager_role_exists(cluster_data: ClusterData):
-    """Cloud controller manager role (if present)"""
+    """Cloud controller manager role (if present)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
+    """
     result = check_operator_role(cluster_data, 'cloud-controller-manager')
 
     if result['available']:
@@ -382,7 +401,9 @@ def test_cloud_controller_manager_role_exists(cluster_data: ClusterData):
 @pytest.mark.operator_roles
 @pytest.mark.severity("LOW")
 def test_control_plane_operator_role_exists(cluster_data: ClusterData):
-    """Control plane operator role (if present)"""
+    """Control plane operator role (if present)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
+    """
     result = check_operator_role(cluster_data, 'control-plane-operator')
 
     if result['available']:
@@ -396,7 +417,9 @@ def test_control_plane_operator_role_exists(cluster_data: ClusterData):
 @pytest.mark.operator_roles
 @pytest.mark.severity("LOW")
 def test_kube_controller_manager_role_exists(cluster_data: ClusterData):
-    """Kube controller manager role (if present)"""
+    """Kube controller manager role (if present)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
+    """
     result = check_operator_role(cluster_data, 'kube-controller-manager')
 
     if result['available']:
@@ -416,6 +439,8 @@ def test_kube_controller_manager_role_exists(cluster_data: ClusterData):
 def test_operator_roles_summary(cluster_data: ClusterData):
     """Display summary of all operator roles
 
+
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-understanding-aws-account-association
     Severity: INFO - Informational test only
     """
     # Find all operator role files

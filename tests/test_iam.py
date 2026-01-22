@@ -2,6 +2,11 @@
 IAM Tests
 
 Validates IAM instance profiles and roles for EC2 instances.
+
+Documentation:
+- ROSA IAM Resources: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/introduction_to_rosa/rosa-sts-about-iam-resources
+- AWS IAM Roles: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html
+- ROSA STS Mode: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/architecture/rosa-sts-about-iam-resources
 """
 
 import pytest
@@ -12,7 +17,9 @@ from models.cluster import ClusterData
 
 @pytest.mark.instances
 def test_iam_instance_profiles_exist(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have IAM instance profiles for EC2 instances"""
+    """Cluster should have IAM instance profiles for EC2 instances
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-overview-of-the-deployment-workflow
+    """
     iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
@@ -42,7 +49,9 @@ def test_iam_instance_profiles_exist(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.instances
 def test_master_iam_instance_profile_exists(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have IAM instance profile for master/control plane nodes"""
+    """Cluster should have IAM instance profile for master/control plane nodes
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-overview-of-the-deployment-workflow
+    """
     iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
@@ -78,7 +87,9 @@ def test_master_iam_instance_profile_exists(cluster_data: ClusterData, infra_id:
 
 @pytest.mark.instances
 def test_worker_iam_instance_profile_exists(cluster_data: ClusterData, infra_id: str):
-    """Cluster should have IAM instance profile for worker nodes"""
+    """Cluster should have IAM instance profile for worker nodes
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-overview-of-the-deployment-workflow
+    """
     iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
@@ -113,7 +124,9 @@ def test_worker_iam_instance_profile_exists(cluster_data: ClusterData, infra_id:
 
 @pytest.mark.instances
 def test_iam_profiles_have_roles(cluster_data: ClusterData, infra_id: str):
-    """IAM instance profiles should have roles attached"""
+    """IAM instance profiles should have roles attached
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-overview-of-the-deployment-workflow
+    """
     iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():
@@ -162,7 +175,9 @@ def test_iam_profiles_have_roles(cluster_data: ClusterData, infra_id: str):
 
 @pytest.mark.instances
 def test_iam_profiles_have_valid_arns(cluster_data: ClusterData, infra_id: str):
-    """IAM instance profiles should have valid ARNs"""
+    """IAM instance profiles should have valid ARNs
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-sts-overview-of-the-deployment-workflow
+    """
     iam_file = cluster_data.aws_dir / f"{cluster_data.cluster_id}_iam_instance_profiles.json"
 
     if not iam_file.exists():

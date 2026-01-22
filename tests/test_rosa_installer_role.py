@@ -170,7 +170,7 @@ def test_installer_role_exists(cluster_data: ClusterData):
             error_msg += "  2. Data collection script does not include IAM role retrieval\n"
             error_msg += "\n🔧 Remediation:\n"
             error_msg += "  • Ensure data collection includes IAM role retrieval\n"
-            error_msg += "  • Run: python get_install_artifacts.py -c <cluster-id> --include-iam\n"
+            error_msg += "  • Run: check_cluster.py <cluster-id> --collect --resources=iam\n"
 
         elif availability['reason'] == 'iam_api_call_failed':
             api_error = availability['api_error']
@@ -284,6 +284,8 @@ def test_installer_role_has_managed_policy(cluster_data: ClusterData):
     1. Attach ROSAInstallerPolicy: aws iam attach-role-policy --role-name <role> --policy-arn arn:aws:iam::aws:policy/ROSAInstallerPolicy
     2. Or verify custom policy has equivalent permissions
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: HIGH - Missing policy prevents cluster installation
     """
     # Check if role exists first
@@ -369,6 +371,8 @@ def test_installer_role_trust_policy(cluster_data: ClusterData):
 
     Success indicates: Trust policy is properly configured.
 
+
+    Documentation: https://docs.aws.amazon.com/rosa/latest/userguide/security-iam-awsmanpol.html
     Severity: MEDIUM - Trust policy issues prevent role assumption
     """
     availability = check_iam_data_availability(cluster_data, 'installer')

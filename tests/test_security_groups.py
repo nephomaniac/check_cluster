@@ -3,6 +3,11 @@ Security Group Tests
 
 Validates that security groups allow necessary traffic flows for ROSA clusters.
 Each test validates a specific traffic flow expectation.
+
+Documentation:
+- ROSA Network Security: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+- AWS Security Groups: https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html
+- ROSA Firewall Requirements: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#osd-aws-privatelink-firewall-prerequisites
 """
 
 import json
@@ -139,6 +144,8 @@ def test_api_server_access(cluster_data: ClusterData, is_private_cluster: bool):
 
     Failure indicates: The API load balancer security group is not allowing inbound traffic
     on port 6443, which would prevent all cluster management operations.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
@@ -182,6 +189,8 @@ def test_machine_config_server_access(cluster_data: ClusterData, is_private_clus
 
     Note: MCS should only be accessible via security groups (from cluster nodes),
     never publicly accessible, regardless of cluster type.
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/architecture/control-plane.html#architecture-machine-config-operator_control-plane
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
@@ -216,7 +225,9 @@ def test_machine_config_server_access(cluster_data: ClusterData, is_private_clus
 
 @pytest.mark.security_groups
 def test_control_plane_api_access(cluster_data: ClusterData):
-    """Control plane must accept API traffic on port 6443"""
+    """Control plane must accept API traffic on port 6443
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -237,7 +248,9 @@ def test_control_plane_api_access(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_control_plane_mcs_access(cluster_data: ClusterData):
-    """Control plane must accept MCS traffic on port 22623"""
+    """Control plane must accept MCS traffic on port 22623
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -262,7 +275,9 @@ def test_control_plane_mcs_access(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_worker_ssh_access(cluster_data: ClusterData):
-    """Worker nodes must allow SSH access on port 22"""
+    """Worker nodes must allow SSH access on port 22
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -290,6 +305,8 @@ def test_worker_kubelet_access(cluster_data: ClusterData):
 
     Failure indicates: Security group is blocking kubelet access, which would prevent
     pod operations like kubectl exec, kubectl logs, and health monitoring.
+    
+    Documentation: https://kubernetes.io/docs/reference/command-line-tools-reference/kubelet/
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
@@ -311,7 +328,9 @@ def test_worker_kubelet_access(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_worker_nodeport_access(cluster_data: ClusterData):
-    """Worker nodes must allow NodePort services (30000-32767)"""
+    """Worker nodes must allow NodePort services (30000-32767)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -339,6 +358,8 @@ def test_worker_vxlan_overlay(cluster_data: ClusterData):
 
     Failure indicates: The overlay network cannot function, preventing pod-to-pod communication
     across different nodes and breaking application connectivity.
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/networking/ovn_kubernetes_network_provider/about-ovn-kubernetes.html
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
@@ -367,6 +388,8 @@ def test_worker_geneve_overlay(cluster_data: ClusterData):
 
     Failure indicates: OVN overlay networking is blocked, preventing pod-to-pod communication
     across nodes and breaking network connectivity for workloads.
+    
+    Documentation: https://docs.openshift.com/container-platform/latest/networking/ovn_kubernetes_network_provider/about-ovn-kubernetes.html
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
@@ -388,7 +411,9 @@ def test_worker_geneve_overlay(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_worker_internal_communication(cluster_data: ClusterData):
-    """Worker nodes must allow internal cluster communication (9000-9999)"""
+    """Worker nodes must allow internal cluster communication (9000-9999)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -420,6 +445,8 @@ def test_all_egress_allowed(cluster_data: ClusterData):
 
     Failure indicates: Egress rules are too restrictive, which would prevent nodes from pulling
     images, accessing cloud APIs, or communicating with external dependencies.
+    
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
     """
     sgs = cluster_data.get_security_groups_by_infra_id()
 
@@ -444,7 +471,9 @@ def test_all_egress_allowed(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_etcd_client_port(cluster_data: ClusterData):
-    """etcd client port (2379) should be accessible (optional)"""
+    """etcd client port (2379) should be accessible (optional)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 
@@ -461,7 +490,9 @@ def test_etcd_client_port(cluster_data: ClusterData):
 
 @pytest.mark.security_groups
 def test_etcd_peer_port(cluster_data: ClusterData):
-    """etcd peer port (2380) should be accessible (optional)"""
+    """etcd peer port (2380) should be accessible (optional)
+    Documentation: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/prepare_your_environment/rosa-sts-aws-prereqs#rosa-security-groups
+    """
     sgs = cluster_data.get_security_groups_by_infra_id()
     infra_id = cluster_data.infra_id
 

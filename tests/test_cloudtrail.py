@@ -2,6 +2,11 @@
 CloudTrail Event Analysis Tests
 
 Analyzes CloudTrail events for security group changes and other critical operations.
+
+Documentation:
+- AWS CloudTrail: https://docs.aws.amazon.com/cloudtrail/latest/userguide/cloudtrail-user-guide.html
+- ROSA Logging: https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws/4/html/observability/rosa-accessing-the-service-logs
+- AWS API Monitoring: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html
 """
 
 import pytest
@@ -59,7 +64,9 @@ def get_error_events(cluster_data: ClusterData) -> list:
 
 @pytest.mark.cloudtrail
 def test_cloudtrail_events_exist(cluster_data: ClusterData):
-    """CloudTrail events should be available"""
+    """CloudTrail events should be available
+    Documentation: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
+    """
     if not cluster_data.cloudtrail_events:
         pytest.skip("No CloudTrail events available")
 
@@ -96,6 +103,8 @@ def test_no_security_group_revocations(cluster_data: ClusterData, request):
         $ aws ec2 describe-security-groups --group-ids <sg-id> \\
             --region <region>
 
+
+    Documentation: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
     Severity: HIGH - Can break cluster communication
     """
     if not cluster_data.cloudtrail_events:
@@ -198,7 +207,9 @@ def test_no_security_group_revocations(cluster_data: ClusterData, request):
 
 @pytest.mark.cloudtrail
 def test_no_api_errors(cluster_data: ClusterData):
-    """CloudTrail should not show excessive API errors"""
+    """CloudTrail should not show excessive API errors
+    Documentation: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
+    """
     if not cluster_data.cloudtrail_events:
         pytest.skip("No CloudTrail events available")
 
@@ -227,7 +238,9 @@ def test_no_api_errors(cluster_data: ClusterData):
 
 @pytest.mark.cloudtrail
 def test_security_group_modifications_tracked(cluster_data: ClusterData):
-    """Security group modifications should be tracked in CloudTrail"""
+    """Security group modifications should be tracked in CloudTrail
+    Documentation: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
+    """
     if not cluster_data.cloudtrail_events:
         pytest.skip("No CloudTrail events available")
 
@@ -240,7 +253,9 @@ def test_security_group_modifications_tracked(cluster_data: ClusterData):
 
 @pytest.mark.cloudtrail
 def test_events_have_timestamps(cluster_data: ClusterData):
-    """All CloudTrail events must have timestamps"""
+    """All CloudTrail events must have timestamps
+    Documentation: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
+    """
     if not cluster_data.cloudtrail_events:
         pytest.skip("No CloudTrail events available")
 
@@ -259,7 +274,9 @@ def test_events_have_timestamps(cluster_data: ClusterData):
 
 @pytest.mark.cloudtrail
 def test_events_have_user_identity(cluster_data: ClusterData):
-    """CloudTrail events should have user identity information"""
+    """CloudTrail events should have user identity information
+    Documentation: https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
+    """
     if not cluster_data.cloudtrail_events:
         pytest.skip("No CloudTrail events available")
 

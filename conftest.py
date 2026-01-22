@@ -181,6 +181,12 @@ def is_private_cluster(cluster_data: ClusterData) -> bool:
 
 
 @pytest.fixture(scope="session")
+def is_privatelink(cluster_data: ClusterData) -> bool:
+    """Check if cluster uses AWS PrivateLink"""
+    return cluster_data.is_privatelink
+
+
+@pytest.fixture(scope="session")
 def vpc_cidr(cluster_data: ClusterData) -> str:
     """Get VPC CIDR"""
     cidr = cluster_data.vpc_cidr
@@ -261,6 +267,10 @@ def pytest_runtest_makereport(item, call):
         if item.function.__doc__:
             # Store docstring as user property for JSON report
             item.user_properties.append(("test_doc", item.function.__doc__))
+
+        # Get the test module's docstring (for file-level documentation)
+        if item.module.__doc__:
+            item.user_properties.append(("module_doc", item.module.__doc__))
 
         # Capture stdout/stderr for HTML report
         if hasattr(outcome, 'capstdout'):
