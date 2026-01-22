@@ -140,7 +140,7 @@ def cluster_dir(request) -> Path:
 @pytest.fixture(scope="session")
 def cluster_data(cluster_dir) -> ClusterData:
     """
-    Load all cluster data from the specified directory.
+    Load all cluster data from the specified directory (AWS/ROSA clusters).
 
     This fixture is session-scoped, so data is loaded once
     and shared across all tests.
@@ -166,6 +166,35 @@ def cluster_data(cluster_dir) -> ClusterData:
         traceback.print_exc(file=sys.stderr)
         print(f"{'='*80}\n", file=sys.stderr)
         pytest.fail(f"Failed to load cluster data: {e}")
+
+
+@pytest.fixture(scope='session')
+def gcp_cluster_data(cluster_dir):
+    """
+    Load GCP cluster data from the specified directory.
+
+    This fixture is session-scoped, so data is loaded once
+    and shared across all GCP tests.
+    """
+    import traceback
+    try:
+        from models.gcp_cluster import GCPClusterData
+        return GCPClusterData(cluster_dir)
+    except json.JSONDecodeError as e:
+        pytest.fail(
+            f"Cannot run tests: Corrupted JSON file in GCP cluster data directory.\n"
+            f"See error details above for the specific file and how to fix it."
+        )
+    except Exception as e:
+        print(f"\n{'='*80}", file=sys.stderr)
+        print(f"❌ ERROR: Failed to load GCP cluster data", file=sys.stderr)
+        print(f"{'='*80}", file=sys.stderr)
+        print(f"Directory: {cluster_dir}", file=sys.stderr)
+        print(f"Error: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"\nStack trace:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        print(f"{'='*80}\n", file=sys.stderr)
+        pytest.fail(f"Failed to load GCP cluster data: {e}")
 
 
 @pytest.fixture(scope="session")

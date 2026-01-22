@@ -165,17 +165,73 @@ For detailed help, see CHECK_README.md
     return args
 
 
+def detect_platform(cluster_id: str, output_dir: str) -> str:
+    """
+    Detect cluster platform (AWS or GCP) by checking cluster metadata.
+
+    Args:
+        cluster_id: Cluster ID
+        output_dir: Output directory
+
+    Returns:
+        'aws' or 'gcp'
+    """
+    # Try to read existing cluster.json
+    cluster_file = Path(output_dir) / cluster_id / 'sources' / 'ocm' / f'{cluster_id}_cluster.json'
+
+    if cluster_file.exists():
+        try:
+            cluster_json = json.loads(cluster_file.read_text())
+
+            # Check for AWS-specific fields
+            if 'aws' in cluster_json or 'aws_infrastructure_access_role_grants' in cluster_json:
+                return 'aws'
+
+            # Check for GCP-specific fields
+            if 'gcp' in cluster_json or 'gcp_network' in cluster_json:
+                return 'gcp'
+
+        except:
+            pass
+
+    # Fall back to querying OCM
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['ocm', 'get', 'cluster', cluster_id],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            cluster_json = json.loads(result.stdout)
+
+            if 'aws' in cluster_json or 'aws_infrastructure_access_role_grants' in cluster_json:
+                return 'aws'
+
+            if 'gcp' in cluster_json or 'gcp_network' in cluster_json:
+                return 'gcp'
+
+    except:
+        pass
+
+    # Default to AWS for backward compatibility
+    return 'aws'
+
+
 def run_collection(args):
     """
-    Run data collection phase using ClusterDataCollector
+    Run data collection phase using appropriate collector for platform
 
     Returns: True if successful, False otherwise
     """
     Colors.header(f"PHASE 1: Collecting Cluster Data for {args.cluster_id}")
 
     try:
-        # Import data collector
-        from lib.data_collection import ClusterDataCollector
+        # Detect platform
+        platform = detect_platform(args.cluster_id, args.output_dir)
+        Colors.info(f"Detected platform: {platform.upper()}")
 
         # Parse resources argument
         resources_to_collect = None
@@ -183,18 +239,32 @@ def run_collection(args):
             resources_to_collect = [r.strip() for r in args.resources.split(',')]
             Colors.info(f"Collecting specific resources: {', '.join(resources_to_collect)}")
 
-        # Create collector instance
-        collector = ClusterDataCollector(
-            cluster_id=args.cluster_id,
-            work_dir=args.output_dir,
-            region=args.region,
-            start_date=args.start,
-            elapsed_time=args.elapsed,
-            period=args.period if args.period else 300,
-            force_update=args.force_update,
-            debug=args.debug,
-            resources=resources_to_collect
-        )
+        # Create platform-specific collector
+        if platform == 'gcp':
+            from lib.gcp_data_collection import GCPDataCollector
+
+            collector = GCPDataCollector(
+                cluster_id=args.cluster_id,
+                work_dir=args.output_dir,
+                force_update=args.force_update,
+                debug=args.debug,
+                resources=resources_to_collect
+            )
+        else:
+            # AWS (default)
+            from lib.data_collection import ClusterDataCollector
+
+            collector = ClusterDataCollector(
+                cluster_id=args.cluster_id,
+                work_dir=args.output_dir,
+                region=args.region,
+                start_date=args.start,
+                elapsed_time=args.elapsed,
+                period=args.period if args.period else 300,
+                force_update=args.force_update,
+                debug=args.debug,
+                resources=resources_to_collect
+            )
 
         # Run collection
         collector.run()

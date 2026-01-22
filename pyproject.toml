@@ -61,4 +61,11 @@ markers = [
     "bootstrap: Bootstrap process tests",
     "operators: Cluster operators tests",
     "etcd: etcd quorum and cluster tests",
+    "gcp: GCP OpenShift cluster tests",
+    "quotas: GCP project quota tests",
+    "apis: GCP API enablement tests",
+    "firewall: GCP firewall rules tests",
+    "dns: GCP DNS configuration tests",
+    "wif: Workload Identity Federation tests",
+    "psc: Private Service Connect tests",
 ]
