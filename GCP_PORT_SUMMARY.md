@@ -1,8 +1,8 @@
-# GCP OpenShift Cluster Validator - Port to check_cluster.py
+# GCP OpenShift Cluster Validations
 
 ## Summary
 
-This document summarizes the porting of `gcp_cluster_validator.sh` (1630 lines of bash) to Python integration with `check_cluster.py`.
+This document summarizes GCP checks.
 
 ## What's Implemented
 
