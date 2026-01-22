@@ -68,7 +68,7 @@ def load_json_file(file_path: Path, cluster_data: Optional['ClusterData'] = None
 
         print(f"\n{'─'*80}", file=sys.stderr)
         print(f"Possible causes:", file=sys.stderr)
-        print(f"  • The data collection script (get_install_artifacts.py) was interrupted", file=sys.stderr)
+        print(f"  • The data collection script (data collection (check_cluster.py --collect) was interrupted", file=sys.stderr)
         print(f"  • Network timeout during AWS API call", file=sys.stderr)
         print(f"  • Disk full or I/O error while writing file", file=sys.stderr)
         print(f"  • File was manually edited and has syntax errors", file=sys.stderr)
@@ -79,7 +79,7 @@ def load_json_file(file_path: Path, cluster_data: Optional['ClusterData'] = None
         print(f"     rm {file_path}", file=sys.stderr)
         print(f"  2. Re-run data collection for this cluster:", file=sys.stderr)
         print(f"     eval $(ocm backplane cloud credentials <cluster-id> -o env)", file=sys.stderr)
-        print(f"     ./get_install_artifacts.py -c <cluster-id> -d {file_path.parent}", file=sys.stderr)
+        print(f"     ./check_cluster.py <cluster-id> --collect -d {file_path.parent}", file=sys.stderr)
         print(f"{'='*80}\n", file=sys.stderr)
 
         # Re-raise the exception with original details
